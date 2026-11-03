@@ -1,12 +1,24 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 """Native locking, editable development and ordinary downstreams with Nix wheels."""
+import argparse
 import json
 import importlib.util
 import os
 from pathlib import Path
 import subprocess
 import tempfile
+import tomllib
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--state-root', type=Path, help='contain test scratch and caches in this directory')
+args = parser.parse_args()
+if args.state_root:
+    state = args.state_root.resolve()
+    for name in ('tmp', 'cache', 'state'):
+        (state / name).mkdir(parents=True, exist_ok=True)
+    os.environ.update(TMPDIR=str(state / 'tmp'), XDG_CACHE_HOME=str(state / 'cache'),
+                      XDG_STATE_HOME=str(state / 'state'), PYTHONDONTWRITEBYTECODE='1')
 
 root = Path(__file__).resolve().parent.parent
 system = subprocess.check_output(['nix', 'eval', '--impure', '--raw', '--expr',
@@ -67,7 +79,10 @@ build-backend = "hatchling.build"
     missing = '/nix/store/' + '0' * 32 + '-unavailable-python-projection'
     assert not Path(missing).exists()
     native_lock = project / 'uv.lock'
-    native_lock.write_text(native_lock.read_text().replace(old, missing))
+    selected_version = next(package['version'] for package in
+                            tomllib.loads(native_lock.read_text())['package'] if package['name'] == 'simple')
+    foreign_version = '0.0.0+nix.foreign.catalog'
+    native_lock.write_text(native_lock.read_text().replace(old, missing).replace(selected_version, foreign_version))
     lock = json.loads(lockfile.read_text())
     lock['projectInputs'][0]['nativeRepository'] = missing
     lock['inputsHash'] = uvp.inputs_hash(str(project), ['.'])
@@ -76,6 +91,8 @@ build-backend = "hatchling.build"
     bound = lockfile.read_bytes(), native_lock.read_bytes()
     subprocess.run([str(cli), 'prefetch', '--project', str(project)], check=True)
     assert bound == (lockfile.read_bytes(), native_lock.read_bytes()), 'prefetch changed committed locks'
+    subprocess.run([str(project / '.venv/bin/python'), '-c',
+        'from importlib.metadata import version; assert version("simple") == ' + repr(selected_version)], check=True)
 
     output = subprocess.check_output([str(tools / 'bin/uv'), 'run', '--project', str(project),
         '--no-sync', 'composed-app'], text=True)
