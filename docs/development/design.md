@@ -90,8 +90,10 @@ them, and the lock run says so.
 The `wheels` function of the shared purifier library
 (github:nix-purifiers/purifier, which took it from this repository)
 decides from a wheel's file name whether it installs
-with the build's Python on the build's system (PEP 425 tags, manylinux
-1, 2010, 2014 and `2_N` against the glibc of the package set, `abi3`). For
+with the build's Python on the build's system (PEP 425 tags; on Linux
+manylinux 1, 2010, 2014 and `2_N` against the glibc of the package set,
+on macOS the arm64 and universal2 tags up to the package set's oldest
+macOS; `abi3`). For
 each package from an index, `nix/lib/build-uv-project.nix` takes its wheels
 that install, or else its sdist and the build of it. A build adds the files
 of its set of build requirements, chosen the same way, and the builds those

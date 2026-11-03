@@ -55,11 +55,15 @@ let
   entryAt = name: lib.findFirst (e: e.path == name) null locked.entries;
   x86Wheel = "markupsafe-3.0.3-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl";
   armWheel = "markupsafe-3.0.3-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl";
+  macosWheel = "markupsafe-3.0.3-cp314-cp314-macosx_11_0_arm64.whl";
   x86Paths = map (e: e.path) (purifier.entriesFor "x86_64-linux" locked);
   lockCases = {
     noProblems = locked.problems == [ ];
     checked = (builtins.tryEval (builtins.deepSeq (purifier.checkLock locked).entries true)).success;
     compiledWheelSystems = (entryAt x86Wheel).systems == [ "x86_64-linux" ];
+    macosWheelSystems = (entryAt macosWheel).systems == [ "aarch64-darwin" ];
+    otherMacosWheelSystems =
+      (entryAt "markupsafe-3.0.3-cp314-cp314-macosx_10_13_x86_64.whl").systems == [ ];
     pureWheelSystems = (entryAt "attrs-25.3.0-py3-none-any.whl").systems == null;
     sdistSystems = (entryAt "docopt-0.6.2.tar.gz").systems == null;
     entriesForSystem = lib.elem x86Wheel x86Paths && !lib.elem armWheel x86Paths;

@@ -14,9 +14,9 @@
 # `entries` is every download either lockfile records: a file entry for
 # each wheel and sdist of uv.lock and of the build requirements, a file
 # entry for each file a package from a URL comes from, and a git entry for
-# each git checkout. A compiled wheel carries `systems`, the Linux systems
-# its platform tags name (an empty list when it names none, such as a
-# macOS wheel); every other entry carries `systems = null`, for every
+# each git checkout. A compiled wheel carries `systems`, the Linux and macOS
+# systems its platform tags name (an empty list when it names none, such as
+# a Windows wheel); every other entry carries `systems = null`, for every
 # system. The builder picks among the wheels of a system by the Python it
 # builds with.
 #
@@ -25,7 +25,8 @@
 # uv.lock and the pyproject.toml of the member (src/uv_purifier.py,
 # derived_outputs), and the lockfile records a field only where the build
 # makes something else. The wheel name is the one the lock run's system
-# makes; the builder rewrites a compiled wheel's tags for its own system.
+# makes; on Linux the builder rewrites a compiled wheel's tags for its own
+# system, and on macOS only a pure wheel has a name.
 { lib }:
 {
   src,
@@ -41,23 +42,35 @@ let
     x86_64 = "x86_64-linux";
     aarch64 = "aarch64-linux";
   };
+  # The same for macOS tags, where a universal2 wheel holds arm64 too.
+  macosSystemsByArch = {
+    arm64 = "aarch64-darwin";
+    universal2 = "aarch64-darwin";
+  };
 
   # The systems a wheel can install on, from its platform tags: null for a
-  # wheel tagged `any`, else the Linux systems of the glibc tags it names.
+  # wheel tagged `any`, else the Linux systems of the glibc tags it names
+  # and the macOS system of its macOS tags.
   wheelSystems =
     name:
     let
       parts = lib.splitString "-" (lib.removeSuffix ".whl" name);
       platforms = lib.splitString "." (lib.last parts);
-      archOf =
+      systemOf =
         tag:
         let
           m = builtins.match "(manylinux1|manylinux2010|manylinux2014|manylinux_[0-9]+_[0-9]+|linux)_(.*)" tag;
+          macos = builtins.match "macosx_[0-9]+_[0-9]+_(.*)" tag;
         in
-        if m == null then null else builtins.elemAt m 1;
-      archs = lib.filter (arch: arch != null && systemsByArch ? ${arch}) (map archOf platforms);
+        if m != null then
+          systemsByArch.${builtins.elemAt m 1} or null
+        else if macos != null then
+          macosSystemsByArch.${builtins.elemAt macos 0} or null
+        else
+          null;
+      systems = lib.filter (system: system != null) (map systemOf platforms);
     in
-    if lib.elem "any" platforms then null else map (arch: systemsByArch.${arch}) (lib.unique archs);
+    if lib.elem "any" platforms then null else lib.unique systems;
 
   withSystems =
     entry:

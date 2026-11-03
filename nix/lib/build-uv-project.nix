@@ -185,9 +185,21 @@ let
   target = "Python ${python.pythonVersion} on ${platform.system}";
   wheelTarget = {
     inherit (python) pythonVersion;
-    arch = platform.parsed.cpu.name;
-    glibcVersion = glibc.version;
-  };
+  }
+  // (
+    if platform.isDarwin then
+      {
+        # macOS wheel tags name the CPU arm64, and the oldest macOS that a
+        # wheel runs on, which is at most nixpkgs' darwinMinVersion.
+        arch = "arm64";
+        macosVersion = platform.darwinMinVersion;
+      }
+    else
+      {
+        arch = platform.parsed.cpu.name;
+        glibcVersion = glibc.version;
+      }
+  );
   installs = purifier.wheels wheelTarget;
 
   # What installing a locked distribution needs on this system: its wheels
@@ -423,8 +435,18 @@ let
 
   # The file name of a member's wheel for this system and Python. The lock
   # run built the wheel on its own system, so a compiled wheel's tags are
-  # rewritten for this one; a pure wheel keeps its name.
-  wheelName = purifier.wheelName wheelTarget;
+  # rewritten for this one; a pure wheel keeps its name. The library's
+  # wheelName knows only Linux platform tags, so on macOS only a pure wheel
+  # has a name.
+  wheelName =
+    if platform.isDarwin then
+      name:
+      if lib.hasSuffix "-any.whl" name then
+        name
+      else
+        throw "uv-purifier: the lock run built ${name}, a wheel with compiled code, and uv-purifier can name the wheel that such a member builds only on Linux, not with ${target}"
+    else
+      purifier.wheelName wheelTarget;
 
   distributionFiles =
     m:

@@ -323,13 +323,16 @@ package builds.
 - Packages from a local directory, sdist or wheel build or install from
   `src` or `pathSources`.
 
-The build runs on Linux, for x86_64 and aarch64; the wheel selection (the
-purifier library's `wheels`) reads the Linux platform tags of a wheel
-against the glibc of the package set. uv.lock and `uv-purifier.lock.json`
-cover every platform, so a lock made anywhere builds on both. A build
-backend reports the requirements it adds at build time for the platform of
-the lock run; a backend that asks for other packages on another platform
-makes that platform's build fail with uv's error naming the package.
+The build runs on Linux, for x86_64 and aarch64, and on Apple Silicon Macs;
+the wheel selection (the purifier library's `wheels`) reads a wheel's Linux
+platform tags against the glibc of the package set, and its macOS tags
+against the package set's oldest macOS. On a Mac, a workspace member whose
+own wheel has compiled code doesn't build: the library's `wheelName` names
+Linux wheels only. uv.lock and `uv-purifier.lock.json` cover every
+platform, so a lock made anywhere builds on each. A build backend reports
+the requirements it adds at build time for the platform of the lock run; a
+backend that asks for other packages on another platform makes that
+platform's build fail with uv's error naming the package.
 
 ## Examples
 
