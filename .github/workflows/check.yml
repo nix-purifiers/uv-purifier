@@ -80,3 +80,4 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - run: python3 tests/composition-native.py
       - run: python3 tests/composition-python.py
+      - run: python3 tests/composition-lifecycle.py

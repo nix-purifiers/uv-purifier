@@ -13,6 +13,7 @@ import pathlib
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -391,3 +392,55 @@ class SplitRequirements(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InputRemoval(unittest.TestCase):
+    def test_cli_explicitly_clears_inputs_for_lock_and_update(self):
+        for operation in ('lock', 'update'):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as root:
+                with mock.patch.object(uvp, operation) as invoke:
+                    self.assertEqual(uvp.main([operation, '--project', root, '--no-inputs']), 0)
+                    self.assertEqual(invoke.call_args.kwargs.get('inputs',
+                        invoke.call_args.args[-1] if operation == 'update' else None), [])
+
+    def test_failed_capture_keeps_producer_roots(self):
+        with tempfile.TemporaryDirectory() as root:
+            roots = pathlib.Path(root, '.uv-purifier/project-inputs')
+            roots.mkdir(parents=True)
+            link = roots / '0'
+            link.symlink_to('/nix/store/producer')
+            with mock.patch.object(uvp, 'previous_lock', return_value={'projectInputs': [{'reference': 'producer'}]}), \
+                 mock.patch.object(uvp, 'native_lock', side_effect=uvp.Error('failed capture')):
+                with self.assertRaises(uvp.Error):
+                    uvp.lock(root, str(pathlib.Path(root, 'lock.json')), inputs=[])
+            self.assertTrue(link.is_symlink())
+
+    def test_successful_capture_releases_only_helper_symlinks(self):
+        with tempfile.TemporaryDirectory() as root:
+            roots = pathlib.Path(root, '.uv-purifier/project-inputs')
+            roots.mkdir(parents=True)
+            (roots / '0').symlink_to('/nix/store/producer')
+            (roots / 'note').write_text('leave other files alone')
+            with mock.patch.object(uvp, 'previous_lock', return_value={'projectInputs': [{'reference': 'producer'}]}), \
+                 mock.patch.object(uvp, 'native_lock'):
+                uvp.lock(root, str(pathlib.Path(root, 'lock.json')), inputs=[])
+            self.assertFalse((roots / '0').is_symlink())
+            self.assertTrue((roots / 'note').exists())
+
+
+    def test_named_update_while_clearing_inputs_keeps_requested_scope(self):
+        with tempfile.TemporaryDirectory() as root:
+            with mock.patch.object(uvp, 'previous_lock', return_value={'projectInputs': [{'reference': 'producer'}]}), \
+                 mock.patch.object(uvp.subprocess, 'run', return_value=mock.Mock(returncode=0)) as resolve, \
+                 mock.patch.object(uvp, 'native_lock'):
+                uvp.lock(root, str(pathlib.Path(root, 'lock.json')), upgrade=True,
+                         inputs=[], upgrade_packages=['attrs'])
+            self.assertEqual(resolve.call_args.args[0], ['uv', 'lock', '--upgrade-package', 'attrs'])
+
+    def test_regular_update_does_not_repeat_native_resolution(self):
+        with tempfile.TemporaryDirectory() as root:
+            with mock.patch.object(uvp, 'previous_lock', return_value={}), \
+                 mock.patch.object(uvp.subprocess, 'run') as resolve, \
+                 mock.patch.object(uvp, 'native_lock'):
+                uvp.lock(root, str(pathlib.Path(root, 'lock.json')), upgrade=True)
+            resolve.assert_not_called()

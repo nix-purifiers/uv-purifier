@@ -133,6 +133,12 @@ The purifier lock records the pinned Nix source, and omits the supplied wheels
 from its downloads. Relocking retains the pin; `update` refreshes it. Repeat
 `--input` for additional producers. Conflicting providers are rejected.
 
+To return all dependencies to their native origins, run
+`uv-purifier lock --no-inputs`, then `uv-purifier prefetch`. This clears retained
+Nix inputs and their helper GC roots after successful resolution.
+`uv-purifier update --no-inputs` also updates native selections; package names
+limit that update as usual. `--no-inputs` and `--input` are mutually exclusive.
+
 Use `uv-purifier lock` and `uv-purifier update` to retain these bindings.
 `prefetch` resolves recorded wheel paths for the current Python and machine
 without changing the committed lockfiles. Development still uses `.venv`
@@ -412,6 +418,16 @@ nix shell 'github:nix-purifiers/uv-purifier'
 uv-purifier lock --lockfile \
   ../flask-packaging/uv-purifier.lock.json
 ```
+
+## Lifecycle regression
+
+`python3 tests/composition-lifecycle.py` evolves a real project through a
+registry dependency bump, registry-to-Nix-to-registry origin changes, dependency
+addition/removal and workspace buildable addition/removal. Each state prepares
+the editable developer environment, builds in the Nix sandbox and installs the
+outgoing projection with ordinary uv using a fresh offline cache. Capture uses
+the network; this is not a full host network-namespace isolation test. CI runs
+it on both supported Linux architectures.
 
 ## Credits
 

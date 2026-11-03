@@ -583,10 +583,30 @@ def input_helpers():
 def lock(root, lockfile, upgrade=False, inputs=None, upgrade_packages=()):
     previous = previous_lock(lockfile)
     old_inputs = previous.get('projectInputs', [])
+    explicit_inputs = inputs is not None
     if inputs is None:
         inputs = [entry['reference'] for entry in old_inputs]
     if not inputs:
-        return native_lock(root, lockfile, upgrade)
+        # Resolve against the user's original manifest, which has no generated
+        # Nix overrides. Remove helper-owned roots only after capture succeeds.
+        if upgrade and explicit_inputs:
+            arguments = ['lock']
+            if upgrade_packages:
+                for name in upgrade_packages:
+                    arguments += ['--upgrade-package', name]
+            else:
+                arguments += ['--upgrade']
+            resolved = subprocess.run(['uv', *arguments], cwd=root, check=False)
+            if resolved.returncode != 0:
+                raise Error('`uv lock` failed while clearing Nix inputs')
+        result = native_lock(root, lockfile, upgrade)
+        if old_inputs:
+            roots = Path(root) / '.uv-purifier' / 'project-inputs'
+            if roots.is_dir():
+                for link in roots.iterdir():
+                    if link.is_symlink():
+                        link.unlink()
+        return result
     sources, bindings = input_helpers()
     try:
         pinned = sources.pin(inputs, old_inputs, refresh=upgrade)
@@ -597,7 +617,7 @@ def lock(root, lockfile, upgrade=False, inputs=None, upgrade_packages=()):
             old_lock = os.path.join(root, 'uv.lock')
             model = tomllib.load(open(old_lock, 'rb')) if os.path.exists(old_lock) else {}
             effective = scratch_project(root, model, temporary)
-            bindings.prepare(Path(effective), views, old_roots, python=project_python(root))
+            selected = bindings.prepare(Path(effective), views, old_roots, python=project_python(root))
             if upgrade:
                 arguments = ['lock']
                 if upgrade_packages:
@@ -605,6 +625,14 @@ def lock(root, lockfile, upgrade=False, inputs=None, upgrade_packages=()):
                         arguments += ['--upgrade-package', package]
                 else:
                     arguments += ['--upgrade']
+                subprocess.run(['uv', *arguments], cwd=effective, check=True)
+            else:
+                # prepare can rebind a previous Nix path, but a registry pin
+                # needs the native resolver to adopt its new Nix origin. The
+                # generated manifest alone cannot validate that transition.
+                arguments = ['lock']
+                for name in sorted(selected):
+                    arguments += ['--upgrade-package', name]
                 subprocess.run(['uv', *arguments], cwd=effective, check=True)
             generated = os.path.join(temporary, LOCK_FILE)
             if os.path.exists(lockfile):
@@ -1091,13 +1119,17 @@ def main(argv=None):
         help=f"write {LOCK_FILE}, keeping uv.lock's resolution (`uv lock` runs only where uv.lock is missing or stale)",
     )
     common(lock_parser)
-    lock_parser.add_argument("--input", action="append", help="a pinned Nix producer with a Python projection")
+    lock_inputs = lock_parser.add_mutually_exclusive_group()
+    lock_inputs.add_argument("--input", action="append", help="a pinned Nix producer with a Python projection")
+    lock_inputs.add_argument("--no-inputs", action="store_true", help="remove retained Nix inputs and resolve native dependency origins")
     update_parser = sub.add_parser(
         "update",
         help="update both lockfiles: `uv lock --upgrade` (or --upgrade-package for each package named), then the purifier lockfile",
     )
     common(update_parser)
-    update_parser.add_argument("--input", action="append", help="a pinned Nix producer with a Python projection")
+    update_inputs = update_parser.add_mutually_exclusive_group()
+    update_inputs.add_argument("--input", action="append", help="a pinned Nix producer with a Python projection")
+    update_inputs.add_argument("--no-inputs", action="store_true", help="remove retained Nix inputs and resolve native dependency origins")
     update_parser.add_argument("packages", nargs="*", help="the packages to update (every package when none)")
     prefetch_parser = sub.add_parser(
         "prefetch",
@@ -1134,9 +1166,9 @@ def main(argv=None):
     try:
         with tool_lockfile(root, outside, writes=args.command in ("lock", "update")):
             if args.command == "lock":
-                lock(root, lockfile, inputs=args.input)
+                lock(root, lockfile, inputs=[] if args.no_inputs else args.input)
             elif args.command == "update":
-                update(root, lockfile, args.packages, args.input)
+                update(root, lockfile, args.packages, [] if args.no_inputs else args.input)
             elif args.command == "prefetch":
                 prefetch(root, lockfile, args.inputs)
             elif args.command == "publish":
