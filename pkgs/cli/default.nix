@@ -10,6 +10,7 @@
   makeWrapper,
   python3,
   uv,
+  nativeUv ? uv,
   git,
   nix-prefetch-git,
   path,
@@ -51,7 +52,7 @@ stdenvNoCC.mkDerivation {
       --add-flags "-I $out/share/uv-purifier/uv_purifier.py" \
       --prefix PATH : ${
         lib.makeBinPath [
-          uv
+          nativeUv
           git
           nix-prefetch-git
         ]
@@ -59,7 +60,10 @@ stdenvNoCC.mkDerivation {
       --set UV_PURIFIER_NIX_LIB $out/share/uv-purifier/nix-lib \
       --set UV_PURIFIER_NIXPKGS ${path} \
       --set UV_PURIFIER_LIBRARY ${library} \
-      --set UV_PURIFIER_PROJECT_INPUTS_TOOLS ${library}/tools
+      --set UV_PURIFIER_PROJECT_INPUTS_TOOLS ${library}/tools \
+      --set UV_PURIFIER_HELPER_UV ${uv}/bin/uv \
+      --set UV_PURIFIER_HELPER_UV_PACKAGE ${uv} \
+      --set UV_PURIFIER_NATIVE_UV_PACKAGE ${nativeUv}
     runHook postInstall
   '';
 

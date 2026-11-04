@@ -62,6 +62,8 @@
   # The Python the project builds and runs with. It must satisfy the
   # project's requires-python.
   python ? python3,
+  # Project manager used for installation; host `uv` handles build/export APIs.
+  nativeUv ? uv,
   # The purifier lockfile. A file outside `src` replaces any copy in it,
   # so a packaging flake can build a project its author does not change.
   lockFile ? src + "/uv-purifier.lock.json",
@@ -308,7 +310,7 @@ let
   # `uv build --out-dir` also writes a .gitignore into the directory, which
   # is no distribution.
   uvBuild = args: ''
-    uv build ${args} --out-dir $out
+    ${uv}/bin/uv build ${args} --out-dir $out
     rm -f $out/.gitignore
   '';
 
@@ -511,17 +513,19 @@ let
   # from their wheels, and the wheels of `members`.
   installEnvironment = exportArgs: members: ''
     ${uvSetup}
-    uv export --frozen ${exportArgs} --no-emit-workspace \
+    sha256sum uv.lock > "$TMPDIR/native-lock.sha256"
+    ${uv}/bin/uv export --offline --frozen ${exportArgs} --no-emit-workspace \
       --format requirements.txt --output-file "$TMPDIR/exported.txt"
+    sha256sum --check "$TMPDIR/native-lock.sha256"
     ${python3.interpreter} -I ${./split_requirements.py} "$TMPDIR/exported.txt" ${directIndex} \
       "$TMPDIR/requirements.txt" "$TMPDIR/direct-wheels.txt"
-    uv venv "$out"
-    uv pip install --python "$out/bin/python" --require-hashes -r "$TMPDIR/requirements.txt"
+    uv venv --no-python-downloads --python ${python.interpreter} "$out"
+    uv --no-config pip install --offline --no-index --find-links ${wheelhouse} --python "$out/bin/python" --require-hashes -r "$TMPDIR/requirements.txt"
     while read -r wheels; do
-      uv pip install --python "$out/bin/python" --no-deps "$wheels"/*.whl
+      uv --no-config pip install --offline --no-index --python "$out/bin/python" --no-deps "$wheels"/*.whl
     done < "$TMPDIR/direct-wheels.txt"
     ${lib.concatMapStrings (name: ''
-      uv pip install --python "$out/bin/python" --no-deps ${distributions.${name}}/*.whl
+      uv --no-config pip install --offline --no-index --python "$out/bin/python" --no-deps ${distributions.${name}}/*.whl
     '') (filter (name: distributions ? ${name}) members)}
   '';
 
@@ -564,7 +568,7 @@ let
         pname = m.name;
         version = memberVersion m;
         src = buildSrc;
-        nativeBuildInputs = [ uv ];
+        nativeBuildInputs = [ nativeUv ];
         env = uvEnv;
         dontConfigure = true;
         buildPhase = ''
@@ -609,7 +613,7 @@ let
     pname = "${projectName}-development";
     version = "0";
     src = buildSrc;
-    nativeBuildInputs = [ uv ];
+    nativeBuildInputs = [ nativeUv ];
     env = uvEnv;
     dontConfigure = true;
     buildPhase = ''

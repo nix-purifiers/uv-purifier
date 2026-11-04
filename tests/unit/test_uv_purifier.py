@@ -32,6 +32,15 @@ split = load("split_requirements", "nix/lib/split_requirements.py")
 
 
 class ProjectPython(unittest.TestCase):
+    def test_native_resolver_and_helper_frontend_are_selected_independently(self):
+        with mock.patch.dict(os.environ, {'UV_PURIFIER_HELPER_UV': '/helper/uv'}), mock.patch.object(
+            uvp.subprocess, 'run', return_value=mock.Mock(returncode=0)
+        ) as command:
+            uvp.run_uv(['lock'], cwd='/project')
+            self.assertEqual(command.call_args.args[0], ['uv', 'lock'])
+            uvp.run_helper_uv(['build'], cwd='/project')
+            self.assertEqual(command.call_args.args[0], ['/helper/uv', 'build'])
+
     def test_nix_build_retains_selected_historical_store_interpreter(self):
         for executable in ('/nix/store/target-python/bin/python3.8', '/usr/bin/python3.8'):
             with self.subTest(executable=executable), mock.patch.dict(os.environ, {

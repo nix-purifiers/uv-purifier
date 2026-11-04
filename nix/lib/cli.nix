@@ -19,6 +19,8 @@
   lockFile ? null,
   pythonVersion ? null,
   pythonInterpreter ? null,
+  nativeUvPackage ? null,
+  uvHelperPackage ? null,
 }:
 let
   pkgs = import nixpkgs { };
@@ -76,13 +78,15 @@ let
     if lib.pathIsDirectory target then source target else target
   );
 
-  buildUvProject = pkgs.callPackage ./build-uv-project.nix {
-    purifier = import purifier { inherit lib; };
-  };
+  buildUvProject = pkgs.callPackage ./build-uv-project.nix (
+    { purifier = import purifier { inherit lib; }; }
+    // lib.optionalAttrs (uvHelperPackage != null) { uv = builtins.storePath uvHelperPackage; }
+  );
   projectSrc = source root;
   project = buildUvProject (
     {
       inherit pathSources;
+      nativeUv = if nativeUvPackage == null then pkgs.uv else builtins.storePath nativeUvPackage;
       python =
         if pythonInterpreter != null then
           {
