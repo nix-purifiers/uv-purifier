@@ -18,6 +18,7 @@
   package ? null,
   lockFile ? null,
   pythonVersion ? null,
+  pythonInterpreter ? null,
 }:
 let
   pkgs = import nixpkgs { };
@@ -83,7 +84,12 @@ let
     {
       inherit pathSources;
       python =
-        if pythonVersion == null then
+        if pythonInterpreter != null then
+          {
+            interpreter = builtins.storePath pythonInterpreter;
+            inherit pythonVersion;
+          }
+        else if pythonVersion == null then
           pkgs.python3
         else
           pkgs.${"python" + builtins.replaceStrings [ "." ] [ "" ] pythonVersion}

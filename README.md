@@ -225,6 +225,13 @@ defines are included.
   such as `fetchers.fetchurl` for a company mirror or credentials.
 - `python` (default `python3` of the package set), which must satisfy the project's
   `requires-python`.
+
+Metadata conversion runs on the builder's helper `python3`, independently of
+this project interpreter. A historical interpreter can come from a separately
+pinned package set. Native `prefetch` and `publish` retain an already-selected
+Nix-store interpreter instead of looking up its minor version in the helper's
+current package set. A non-Nix interpreter continues to use the package-set
+lookup for the selected minor version.
 - `lockFile` (default `src + "/uv-purifier.lock.json"`), the purifier
   lockfile. A file given outside `src` replaces any copy in it.
 - `uvLock` (default `src + "/uv.lock"`). A file given outside `src`
@@ -431,6 +438,26 @@ the editable developer environment, builds in the Nix sandbox and installs the
 outgoing projection with ordinary uv using a fresh offline cache. Capture uses
 the network; this is not a full host network-namespace isolation test. CI runs
 it on both supported Linux architectures.
+
+`tests/composition-epochs.py` separates the helper, native uv and target Python.
+It locks a project with a compiled dependency, builds a producer, consumes it as
+an explicit Nix input, prepares the interactive environment, builds a consumer
+and installs the outgoing projection with ordinary uv in a fresh environment.
+Manifests and locks must remain unchanged during prefetch. The report retains
+source and target package-set hashes, exact interpreters, manager version,
+driver digest, fixture lock digests and individual operation results.
+
+```zsh
+python3 -B tests/composition-epochs.py \
+  --target-nixpkgs /nix/store/PINNED-HISTORICAL-NIXPKGS-source \
+  --python-attribute python38 --state-root .python-epochs
+```
+
+`--shared-library /path/to/purifier` selects and records an explicit shared
+library candidate for dependent review. Passing a candidate does not establish
+support with the default shared input. Python 3.8.19 and 3.9.20 are individual
+historical target observations; they do not establish all earlier releases,
+other Python implementations, extension build toolchains or uv manager epochs.
 
 ## Credits
 

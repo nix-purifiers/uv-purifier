@@ -32,6 +32,20 @@ split = load("split_requirements", "nix/lib/split_requirements.py")
 
 
 class ProjectPython(unittest.TestCase):
+    def test_nix_build_retains_selected_historical_store_interpreter(self):
+        for executable in ('/nix/store/target-python/bin/python3.8', '/usr/bin/python3.8'):
+            with self.subTest(executable=executable), mock.patch.dict(os.environ, {
+                'UV_PURIFIER_NIX_LIB': '/library', 'UV_PURIFIER_NIXPKGS': '/nixpkgs',
+                'UV_PURIFIER_LIBRARY': '/purifier',
+            }), mock.patch.object(uvp, 'project_python', return_value='/project/.venv/bin/python'), mock.patch.object(
+                uvp.subprocess, 'check_output', return_value=json.dumps({'version': '3.8', 'executable': executable})
+            ), mock.patch.object(uvp.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout='/nix/store/result\n')) as build:
+                self.assertEqual(uvp.nix_build('/project', '/project/uv-purifier.lock.json'), '/nix/store/result')
+                command = build.call_args.args[0]
+                self.assertEqual('pythonInterpreter' in command, executable.startswith('/nix/store/'))
+                if 'pythonInterpreter' in command:
+                    self.assertEqual(command[command.index('pythonInterpreter') + 1], executable)
+
     def test_explicit_target_is_passed_to_python_find(self):
         with mock.patch.dict(os.environ, {"UV_PYTHON": "/fixture/python"}), mock.patch.object(
             uvp, "run_uv", return_value=mock.Mock(returncode=0, stdout="/fixture/python\n")

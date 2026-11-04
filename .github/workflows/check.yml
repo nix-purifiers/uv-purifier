@@ -81,3 +81,41 @@ jobs:
       - run: python3 tests/composition-native.py
       - run: python3 tests/composition-python.py
       - run: python3 tests/composition-lifecycle.py
+
+  python-target-epochs:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        python: [python38, python39]
+        include:
+          - python: python38
+            nixpkgs: 205fd4226592cc83fd4c0885a3e4c9c400efabb5
+          - python: python39
+            nixpkgs: b134951a4c9f3c995fd7be05f3243f8ecd65d798
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - uses: actions/checkout@v5
+        with:
+          repository: nix-purifiers/purifier
+          ref: 6778d97aba46d820f6c301d861e0cb78ba343d0a
+          path: .epoch-shared
+      - name: Exercise the exact historical target with the shared probe candidate
+        run: |
+          nix flake metadata --json 'github:NixOS/nixpkgs/${{ matrix.nixpkgs }}' > epoch-target.json
+          python3 -B tests/composition-epochs.py \
+            --target-nixpkgs "$(jq -r .path epoch-target.json)" \
+            --python-attribute '${{ matrix.python }}' \
+            --shared-library .epoch-shared --state-root .python-epochs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-epochs-${{ matrix.runner }}-${{ matrix.python }}
+          include-hidden-files: true
+          path: |
+            .python-epochs/report.json
+            .python-epochs/commands.log
+            epoch-target.json

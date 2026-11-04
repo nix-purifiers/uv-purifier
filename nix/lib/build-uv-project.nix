@@ -126,7 +126,9 @@ let
   oldRepositoryFile = writeText "uv-python-original-repositories.json" (
     builtins.toJSON oldRepositories
   );
-  inputPython = python.withPackages (ps: [
+  # Metadata conversion runs on the helper interpreter, independently of the
+  # project runtime. Wheel compatibility is still queried from `python`.
+  inputPython = python3.withPackages (ps: [
     ps.packaging
     ps.tomli-w
   ]);
@@ -150,7 +152,7 @@ let
         cp --no-preserve=mode ${uvLock} "$out/uv.lock"
         mkdir -p "$out/.uv-purifier-inputs"
         cp --no-preserve=mode ${directIndexBase} "$out/.uv-purifier-inputs/direct.json"
-        PYTHONPATH=${purifier.projectInputsTool} python ${./python_inputs.py} --project "$out" --views ${inputViews} \
+        PYTHONPATH=${purifier.projectInputsTool} python ${./python_inputs.py} --python ${python.interpreter} --project "$out" --views ${inputViews} \
           --old-repositories ${oldRepositoryFile} \
           --index "$out/.uv-purifier-inputs/direct.json" \
           --wheelhouse "$out/.uv-purifier-inputs/wheels"
@@ -511,7 +513,7 @@ let
     ${uvSetup}
     uv export --frozen ${exportArgs} --no-emit-workspace \
       --format requirements.txt --output-file "$TMPDIR/exported.txt"
-    ${python.interpreter} -I ${./split_requirements.py} "$TMPDIR/exported.txt" ${directIndex} \
+    ${python3.interpreter} -I ${./split_requirements.py} "$TMPDIR/exported.txt" ${directIndex} \
       "$TMPDIR/requirements.txt" "$TMPDIR/direct-wheels.txt"
     uv venv "$out"
     uv pip install --python "$out/bin/python" --require-hashes -r "$TMPDIR/requirements.txt"
