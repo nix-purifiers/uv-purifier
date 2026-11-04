@@ -242,6 +242,11 @@ Nix-store interpreter instead of looking up its minor version in the helper's
 current package set. A non-Nix interpreter continues to use the package-set
 lookup for the selected minor version.
 
+Linux wheel selection uses the selected Python package's libc version. For an
+immutable interpreter selected by the CLI, this version comes from the running
+target interpreter. The helper package set's newer libc cannot admit a wheel
+that requires a newer runtime than the target provides.
+
 `nativeUv` selects the project's resolver and installer independently of the
 host `uv` build/export/publication frontend. It defaults to the same tool.
 Pass `nativeUv` to `buildUvProject`, override it on that builder, or override it
@@ -464,6 +469,12 @@ and installs the outgoing projection with ordinary uv in a fresh environment.
 Manifests and locks must remain unchanged during prefetch. The report retains
 source and target package-set hashes, exact interpreters, manager version,
 driver digest, fixture lock digests and individual operation results.
+
+The target-platform observation compares native wheel admission with both the
+pure builder and CLI build evaluation: a wheel requiring a newer glibc must be
+rejected, and one naming the target's glibc must be admitted. Its payload is
+pure Python, so this observation establishes platform admission, without adding
+compiled extension ABI or compiler compatibility credit.
 
 ```zsh
 python3 -B tests/composition-epochs.py \
