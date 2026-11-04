@@ -940,13 +940,19 @@ def nix_build(root, lockfile, package=None, out_link=None):
         "--argstr", "src", root,
     ]
     selected_python = json.loads(subprocess.check_output([project_python(root), '-I', '-c',
-        'import json,os,sys;print(json.dumps({"version":"%d.%d" % sys.version_info[:2],'
-        '"executable":os.path.realpath(sys.executable)}))'], text=True))
+        'import json,os,sys\n'
+        'try:\n libc=os.confstr("CS_GNU_LIBC_VERSION")\n'
+        'except (AttributeError,OSError,ValueError):\n libc=None\n'
+        'print(json.dumps({"version":"%d.%d" % sys.version_info[:2],'
+        '"executable":os.path.realpath(sys.executable),'
+        '"glibc":libc.split()[1] if libc and libc.startswith("glibc ") else None}))'], text=True))
     args += ["--argstr", "pythonVersion", selected_python['version']]
     # Reuse the selected immutable Nix interpreter, including historical package
     # sets absent from the helper's nixpkgs. Never infer a different patch release.
     if selected_python['executable'].startswith('/nix/store/'):
         args += ["--argstr", "pythonInterpreter", selected_python['executable']]
+        if selected_python.get('glibc'):
+            args += ["--argstr", "pythonGlibcVersion", selected_python['glibc']]
     for variable, argument in [('UV_PURIFIER_NATIVE_UV_PACKAGE', 'nativeUvPackage'),
                                ('UV_PURIFIER_HELPER_UV_PACKAGE', 'uvHelperPackage')]:
         if os.environ.get(variable):

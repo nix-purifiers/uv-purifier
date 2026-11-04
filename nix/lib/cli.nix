@@ -19,6 +19,7 @@
   lockFile ? null,
   pythonVersion ? null,
   pythonInterpreter ? null,
+  pythonGlibcVersion ? null,
   nativeUvPackage ? null,
   uvHelperPackage ? null,
 }:
@@ -95,6 +96,7 @@ let
             interpreter = builtins.storePath pythonInterpreter;
             inherit pythonVersion;
           }
+          // lib.optionalAttrs (pythonGlibcVersion != null) { glibcVersion = pythonGlibcVersion; }
         else if pythonVersion == null then
           pkgs.python3
         else

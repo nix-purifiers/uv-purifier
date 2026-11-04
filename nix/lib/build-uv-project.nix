@@ -205,7 +205,9 @@ let
     else
       {
         arch = platform.parsed.cpu.name;
-        glibcVersion = glibc.version;
+        # A historical Python can use an older libc than the helper package set.
+        # CLI-selected immutable interpreters carry their probed runtime version.
+        glibcVersion = python.glibcVersion or (python.stdenv.cc.libc.version or glibc.version);
       }
   );
   installs = purifier.wheels wheelTarget;

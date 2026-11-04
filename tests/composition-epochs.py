@@ -40,7 +40,7 @@ def main():
               'targetNixpkgs': str(args.target_nixpkgs.resolve()),
               'targetAttribute': args.python_attribute,
               'results': {name: {'status': 'not-run'} for name in
-                          ('target-runtime', 'native-lock', 'producer-pure-build',
+                          ('target-runtime', 'target-platform-admission', 'native-lock', 'producer-pure-build',
                            'incoming-lock', 'interactive-prefetch', 'incoming-pure-build',
                            'publication-dry-run', 'ordinary-consumer',
                            'dependency-add-with-nix', 'dependency-drop-with-nix')}}
@@ -119,6 +119,17 @@ def main():
         helper_uv = Path(run('nix', 'build', '--impure', '--expr', package_prefix + 'p.uv',
                              '--out-link', state / 'helper-uv', '--print-out-paths')) / 'bin/uv'
         report.update(helperManager=run(helper_uv, '--version'), helperManagerPackage=str(helper_uv.parent.parent))
+        passed(active)
+
+        active = 'target-platform-admission'
+        import runpy
+        check_target_platform = runpy.run_path(str(Path(snapshot) / 'tests/target_platform.py'))['check']
+        library_path = shared_snapshot or run('nix', 'eval', '--impure', '--raw', '--expr',
+            'let f=builtins.getFlake ' + json.dumps('path:' + snapshot) + '; in f.inputs.purifier.outPath')
+        report['targetPlatformAdmission'] = check_target_platform(
+            run, state, snapshot, target_expression, python, helper_uv, system, library_path, env)
+        report['targetPlatformDriverDigest'] = hashlib.sha256(
+            (Path(snapshot) / 'tests/target_platform.py').read_bytes()).hexdigest()
         passed(active)
 
         def native_environment(directory, consumer=False, published=False):
