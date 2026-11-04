@@ -928,9 +928,14 @@ def nix_build(root, lockfile, package=None, out_link=None):
         "--arg", "purifier", purifier,
         "--argstr", "src", root,
     ]
-    python_version = subprocess.check_output([project_python(root), '-I', '-c',
-        'import sys;print("%d.%d" % sys.version_info[:2])'],text=True).strip()
-    args += ["--argstr", "pythonVersion", python_version]
+    selected_python = json.loads(subprocess.check_output([project_python(root), '-I', '-c',
+        'import json,os,sys;print(json.dumps({"version":"%d.%d" % sys.version_info[:2],'
+        '"executable":os.path.realpath(sys.executable)}))'], text=True))
+    args += ["--argstr", "pythonVersion", selected_python['version']]
+    # Reuse the selected immutable Nix interpreter, including historical package
+    # sets absent from the helper's nixpkgs. Never infer a different patch release.
+    if selected_python['executable'].startswith('/nix/store/'):
+        args += ["--argstr", "pythonInterpreter", selected_python['executable']]
     if os.path.abspath(lockfile) != os.path.join(root, LOCK_FILE):
         args += ["--argstr", "lockFile", os.path.abspath(lockfile)]
     if package is not None:

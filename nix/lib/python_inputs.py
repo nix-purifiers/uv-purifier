@@ -83,9 +83,10 @@ def main():
     parser.add_argument('--old-repositories', required=True, type=Path)
     parser.add_argument('--index', type=Path)
     parser.add_argument('--wheelhouse', type=Path)
+    parser.add_argument('--python', type=Path, help='project interpreter whose wheel tags must be selected')
     args = parser.parse_args()
     prepare(args.project, json.loads(args.views.read_text()), json.loads(args.old_repositories.read_text()),
-            args.index, args.wheelhouse)
+            args.index, args.wheelhouse, python=args.python)
 
 
 if __name__ == '__main__':
