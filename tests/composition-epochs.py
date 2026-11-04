@@ -65,10 +65,14 @@ def main():
     try:
         metadata = json.loads(run('nix', 'flake', 'metadata', '--json', '--no-write-lock-file', str(sdk)))
         snapshot = metadata['path']
+        archived = json.loads(run('nix', 'flake', 'archive', '--json', '--no-write-lock-file', str(sdk)))
+        assert archived['path'] == snapshot, 'SDK source changed during fixture setup'
         shared_snapshot = None
         if args.shared_library:
             shared = json.loads(run('nix', 'flake', 'metadata', '--json', '--no-write-lock-file', str(args.shared_library.resolve())))
             shared_snapshot = shared['path']
+            archived_shared = json.loads(run('nix', 'flake', 'archive', '--json', '--no-write-lock-file', str(args.shared_library.resolve())))
+            assert archived_shared['path'] == shared_snapshot, 'shared source changed during fixture setup'
             report['sharedLibrary'] = {'path': shared_snapshot, 'narHash': shared['locked']['narHash']}
         system = run('nix', 'eval', '--impure', '--raw', '--expr', 'builtins.currentSystem')
         report.update(system=system, source={'path': snapshot, 'narHash': metadata['locked']['narHash'],
