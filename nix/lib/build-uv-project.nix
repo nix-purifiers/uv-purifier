@@ -43,6 +43,7 @@
   unzip,
   zstd,
   uv,
+  nativeUv ? uv,
   glibc,
   python3,
   fetchurl,
@@ -52,6 +53,9 @@
   # helpers. The overlay passes the library that uv-purifier is pinned to.
   purifier,
 }:
+let
+  defaultNativeUv = nativeUv;
+in
 {
   # The project root, which holds uv.lock, the root pyproject.toml and, unless
   # `lockFile` names another path, uv-purifier.lock.json.
@@ -63,7 +67,7 @@
   # project's requires-python.
   python ? python3,
   # Project manager used for installation; host `uv` handles build/export APIs.
-  nativeUv ? uv,
+  nativeUv ? defaultNativeUv,
   # The purifier lockfile. A file outside `src` replaces any copy in it,
   # so a packaging flake can build a project its author does not change.
   lockFile ? src + "/uv-purifier.lock.json",

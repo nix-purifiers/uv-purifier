@@ -33,6 +33,7 @@ def main():
                XDG_CONFIG_HOME=str(state / 'config'), XDG_DATA_HOME=str(state / 'data'),
                XDG_STATE_HOME=str(state / 'state'), UV_PYTHON_DOWNLOADS='never',
                UV_CACHE_DIR=str(state / 'cache/uv'))
+    env.pop('UV_PROJECT_ENVIRONMENT', None)
     report = {'version': 1, 'scope': 'exact Python target/helper tuple; no inferred intervals',
               'cacheProfile': 'cold-native-cache',
               'driverDigest': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -168,11 +169,11 @@ def main():
                 old=import target {system="''' + system + '''";config.allowInsecure=true;};
                 build=p.callPackage (sdk.outPath+"/nix/lib/build-uv-project.nix") {
                   purifier=import sdk.inputs.purifier {lib=p.lib;};
+                  ''' + ('nativeUv=p.callPackage (sdk.outPath + ' + json.dumps('/tests/sdk/' + args.native_uv_epoch + '.nix') + ') {};' if args.native_uv_epoch else '') + '''
                 };
                 project=build {src=builtins.path {path=self;filter=path: type:
                   !(builtins.elem (baseNameOf path) [".venv" ".uv-purifier" "__pycache__"]);};
                   python=old.''' + args.python_attribute + ''';
-                  ''' + ('nativeUv=p.callPackage (sdk.outPath + ' + json.dumps('/tests/sdk/' + args.native_uv_epoch + '.nix') + ') {};' if args.native_uv_epoch else '') + '''
                   testCommand=["''' + name + '''"];};
               in {packages.''' + system + '''={default=project.packages."''' + name.replace('_', '-') + '''";
                 tests=project.tests;};};
