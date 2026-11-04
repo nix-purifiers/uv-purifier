@@ -101,11 +101,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: nix-purifiers/purifier
-          ref: 6778d97aba46d820f6c301d861e0cb78ba343d0a
+          ref: 09a2da5af5b163ae3237eb39bbafd5da5899e296
           path: .epoch-shared
       - name: Exercise the exact historical target with the shared probe candidate
         run: |
-          nix flake metadata --json 'github:NixOS/nixpkgs/${{ matrix.nixpkgs }}' > epoch-target.json
+          nix flake archive --json 'github:NixOS/nixpkgs/${{ matrix.nixpkgs }}' > epoch-target.json
           python3 -B tests/composition-epochs.py \
             --target-nixpkgs "$(jq -r .path epoch-target.json)" \
             --python-attribute '${{ matrix.python }}' \
