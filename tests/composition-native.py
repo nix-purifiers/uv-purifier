@@ -41,6 +41,7 @@ with tempfile.TemporaryDirectory(prefix='uv-native-composition-') as temporary:
     tools = Path(subprocess.check_output(['nix', 'build', '--impure', '--print-out-paths',
         '--out-link', str(temporary / 'tools'), '--expr', expression], text=True,
         env=dict(os.environ, UV_COMPOSITION_FLAKE=snapshot)).strip())
+    os.environ['UV_PYTHON'] = str(tools / 'bin/python')
     project = temporary / 'project'
     source = project / 'src/composed_app/__init__.py'
     source.parent.mkdir(parents=True)

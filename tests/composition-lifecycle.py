@@ -35,6 +35,9 @@ with tempfile.TemporaryDirectory(prefix='uv-lifecycle-') as directory:
           ln -s ${p.uv}/bin/uv $out/bin/uv
           ln -s ${p.python3.interpreter} $out/bin/python
         '' ''', env=dict(os.environ, UV_LIFECYCLE_FLAKE=snapshot)))
+    # Capture, development and the producer must share the fixture's ABI,
+    # independently of the Python preinstalled by the CI runner.
+    os.environ['UV_PYTHON'] = str(tools / 'bin/python')
     project = temporary / 'project'
     (project / 'src/lifecycle_app').mkdir(parents=True)
     source = project / 'src/lifecycle_app/__init__.py'
