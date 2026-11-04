@@ -20,6 +20,7 @@
   pythonVersion ? null,
   pythonInterpreter ? null,
   pythonGlibcVersion ? null,
+  pythonFreeThreaded ? false,
   nativeUvPackage ? null,
   uvHelperPackage ? null,
 }:
@@ -95,6 +96,7 @@ let
           {
             interpreter = builtins.storePath pythonInterpreter;
             inherit pythonVersion;
+            freeThreaded = pythonFreeThreaded;
           }
           // lib.optionalAttrs (pythonGlibcVersion != null) { glibcVersion = pythonGlibcVersion; }
         else if pythonVersion == null then

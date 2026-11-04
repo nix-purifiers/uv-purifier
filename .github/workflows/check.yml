@@ -151,3 +151,35 @@ jobs:
             .native-uv-epoch/report.json
             .native-uv-epoch/commands.log
             epoch-target.json
+
+  python-free-threaded:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - uses: actions/checkout@v5
+        with:
+          repository: nix-purifiers/purifier
+          ref: 369e2ae61d6117d7d890b5bd69c134ea3641565f
+          path: .abi-shared
+      - name: Exercise the actual free-threaded target and compiled dependency
+        run: |
+          nix flake archive --json > abi-sdk.json
+          python3 -B tests/composition-epochs.py \
+            --target-nixpkgs "$(jq -r .inputs.nixpkgs.path abi-sdk.json)" \
+            --python-attribute python314FreeThreading --compiled-dependency-version 3.0.3 \
+            --shared-library .abi-shared --state-root .python-free-threaded
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-free-threaded-${{ matrix.runner }}
+          include-hidden-files: true
+          path: |
+            .python-free-threaded/report.json
+            .python-free-threaded/commands.log
+            abi-sdk.json

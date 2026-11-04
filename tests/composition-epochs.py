@@ -18,8 +18,9 @@ def main():
     parser.add_argument('--state-root', type=Path, required=True)
     parser.add_argument('--shared-library', type=Path, help='explicit shared-library candidate; recorded separately')
     parser.add_argument('--native-uv-epoch', help='explicit package fixture from tests/sdk, independent of helper and Python')
+    parser.add_argument('--compiled-dependency-version', default='2.1.5', help='explicit MarkupSafe fixture version; recorded in the receipt')
     args = parser.parse_args()
-    if not args.python_attribute.startswith('python') or not args.python_attribute[6:].isdigit():
+    if not re.fullmatch(r'python[A-Za-z0-9_]+', args.python_attribute):
         parser.error('expected an explicit Python package attribute')
     sdk = Path(__file__).resolve().parents[1]
     if args.native_uv_epoch and (Path(args.native_uv_epoch).name != args.native_uv_epoch or
@@ -35,6 +36,7 @@ def main():
                UV_CACHE_DIR=str(state / 'cache/uv'))
     env.pop('UV_PROJECT_ENVIRONMENT', None)
     report = {'version': 1, 'scope': 'exact Python target/helper tuple; no inferred intervals',
+              'fixtureParameters': {'markupsafe': args.compiled_dependency_version},
               'cacheProfile': 'cold-native-cache',
               'driverDigest': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               'targetNixpkgs': str(args.target_nixpkgs.resolve()),
@@ -98,6 +100,8 @@ def main():
         python = target / 'bin/python3'
         version = run(python, '-I', '-c', 'import platform;print(platform.python_version())')
         report['targetPython'] = {'package': str(target), 'version': version}
+        target_free_threaded = run(python, '-I', '-c', 'import sysconfig;print(bool(sysconfig.get_config_var("Py_GIL_DISABLED")))') == 'True'
+        report['targetPython']['freeThreaded'] = target_free_threaded
         minor = '.'.join(version.split('.')[:2])
         next_minor = str(int(version.split('.')[1]) + 1)
         override = ['--override-input', 'purifier', 'path:' + shared_snapshot] if shared_snapshot else []
@@ -133,6 +137,11 @@ def main():
         passed(active)
 
         def native_environment(directory, consumer=False, published=False):
+            assert (run(directory / 'bin/python', '-I', '-c',
+                'import sysconfig;print(bool(sysconfig.get_config_var("Py_GIL_DISABLED")))') == 'True') == target_free_threaded
+            if target_free_threaded:
+                assert run(directory / 'bin/python', '-I', '-c',
+                    'import sys,markupsafe._speedups;print(sys._is_gil_enabled())') == 'False'
             configuration = dict(line.split(' = ', 1) for line in (directory / 'pyvenv.cfg').read_text().splitlines() if ' = ' in line)
             assert configuration['uv'] == report['nativeManager'].split()[1], configuration
             site = Path(run(directory / 'bin/python', '-E', '-s', '-c', 'import sysconfig;print(sysconfig.get_path("purelib"))'))
@@ -142,7 +151,7 @@ def main():
             if consumer and extra_dependency:
                 expected.add('attrs')
             assert set(graph) == expected and len(records) == len(graph), graph
-            assert graph['markupsafe'] == '2.1.5', graph
+            assert graph['markupsafe'] == args.compiled_dependency_version, graph
             if consumer and extra_dependency:
                 assert graph['attrs'] == '23.2.0', graph
             assert ('+nix.' in graph['epoch-provider']) == consumer, graph
@@ -193,7 +202,7 @@ def main():
             return directory
 
         active = 'native-lock'
-        producer = project('epoch_provider', ['markupsafe==2.1.5'])
+        producer = project('epoch_provider', ['markupsafe==' + args.compiled_dependency_version])
         run(uv, 'lock', '--no-python-downloads', cwd=producer)
         native_bytes = (producer / 'uv.lock').read_bytes()
         run(cli, 'lock', '--project', producer)

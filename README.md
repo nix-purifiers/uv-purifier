@@ -476,6 +476,16 @@ rejected, and one naming the target's glibc must be admitted. Its payload is
 pure Python, so this observation establishes platform admission, without adding
 compiled extension ABI or compiler compatibility credit.
 
+The free-threaded target job selects `python314FreeThreading` and explicitly
+uses MarkupSafe 3.0.3. Package metadata and the CLI's runtime probe carry the
+free-threaded flag into wheel selection. Isolated native resolver tests check
+the normal, free-threaded and stable ABI tags; direct wheel installation is
+insufficient for this check because it can bypass ABI candidate filtering.
+The complete producer, Nix-input, publication and ordinary-consumer flow
+imports the compiled MarkupSafe extension and checks that the runtime stays
+free-threaded. This is an exact target observation, without adding Python 3.15
+`abi3t`, other compiler configurations, or concurrency correctness claims.
+
 ```zsh
 python3 -B tests/composition-epochs.py \
   --target-nixpkgs /nix/store/PINNED-HISTORICAL-NIXPKGS-source \
