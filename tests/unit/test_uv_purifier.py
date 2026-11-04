@@ -31,6 +31,17 @@ uvp = load("uv_purifier", "src/uv_purifier.py")
 split = load("split_requirements", "nix/lib/split_requirements.py")
 
 
+class ProjectPython(unittest.TestCase):
+    def test_explicit_target_is_passed_to_python_find(self):
+        with mock.patch.dict(os.environ, {"UV_PYTHON": "/fixture/python"}), mock.patch.object(
+            uvp, "run_uv", return_value=mock.Mock(returncode=0, stdout="/fixture/python\n")
+        ) as run:
+            self.assertEqual(uvp.project_python("/project"), "/fixture/python")
+            run.assert_called_once_with(
+                ["python", "find", "--no-python-downloads", "/fixture/python"], cwd="/project"
+            )
+
+
 class FileNames(unittest.TestCase):
     def test_last_segment_of_the_path(self):
         self.assertEqual(

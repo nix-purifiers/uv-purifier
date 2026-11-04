@@ -898,7 +898,10 @@ def check_lockfile(root, path):
 
 
 def project_python(root):
-    found = run_uv(['python','find','--no-python-downloads'], cwd=root)
+    # `uv python find` takes a positional request and does not read UV_PYTHON.
+    # Pass the same explicit request used by uv's project commands.
+    request = os.environ.get('UV_PYTHON')
+    found = run_uv(['python','find','--no-python-downloads', *([request] if request else [])], cwd=root)
     if found.returncode != 0 or not found.stdout.strip():
         raise Error('uv could not select the project Python: ' + found.stderr.strip())
     return found.stdout.strip()
