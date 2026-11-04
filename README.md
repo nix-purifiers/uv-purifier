@@ -225,6 +225,15 @@ defines are included.
   such as `fetchers.fetchurl` for a company mirror or credentials.
 - `python` (default `python3` of the package set), which must satisfy the project's
   `requires-python`.
+- `nativeUv` (default the package set's `uv`), the native resolver and installer.
+- `lockFile` (default `src + "/uv-purifier.lock.json"`), the purifier
+  lockfile. A file given outside `src` replaces any copy in it.
+- `uvLock` (default `src + "/uv.lock"`). A file given outside `src`
+  replaces the copy in it.
+- `pathSources`, the local packages that uv.lock names by a path outside
+  `src`, such as `pathSources."../shared" = ../shared;`. A flake's source
+  tree cannot reach outside itself. A path inside `src` needs no entry.
+- `testCommand`, the command of `tests`.
 
 Metadata conversion runs on the builder's helper `python3`, independently of
 this project interpreter. A historical interpreter can come from a separately
@@ -232,10 +241,17 @@ pinned package set. Native `prefetch` and `publish` retain an already-selected
 Nix-store interpreter instead of looking up its minor version in the helper's
 current package set. A non-Nix interpreter continues to use the package-set
 lookup for the selected minor version.
-- `lockFile` (default `src + "/uv-purifier.lock.json"`), the purifier
-  lockfile. A file given outside `src` replaces any copy in it.
-- `uvLock` (default `src + "/uv.lock"`). A file given outside `src`
-  replaces the copy in it.
+
+`nativeUv` selects the project's resolver and installer independently of the
+host `uv` build/export/publication frontend. It defaults to the same tool.
+Pass `nativeUv` to `buildUvProject`, override it on that builder, or override it
+on the `cli` package; the
+CLI retains both package identities when it invokes Nix. Project lock and
+installation commands use the selected native manager. Helper export is frozen
+and its lock bytes are checked before installation. Offline and index settings
+are explicit native flags, including for older managers that ignore newer uv
+environment variables. Locked wheel installation does not reapply project
+resolver configuration.
 
 `lockFile` and `uvLock` serve an external build, in which a packaging
 flake builds a project that it does not change. The packaging flake keeps
@@ -243,10 +259,6 @@ the purifier lockfile beside itself. When the committed uv.lock of the
 project is missing or stale, the packaging flake can keep its own uv.lock
 too. The commands take the same paths through `--lockfile` and
 `--tool-lockfile`, as the Development loop section describes.
-- `pathSources`, the local packages that uv.lock names by a path outside
-  `src`, such as `pathSources."../shared" = ../shared;`. A flake's source
-  tree cannot reach outside itself. A path inside `src` needs no entry.
-- `testCommand`, the command of `tests`.
 
 `lib.uv-purifier.readLock { src, lockFile ? ..., uvLock ? ... }` reads uv.lock and the
 purifier lockfile into the lock in memory of the purifier contract,
@@ -464,6 +476,15 @@ library candidate for dependent review. Passing a candidate does not establish
 support with the default shared input. Python 3.8.19 and 3.9.20 are individual
 historical target observations; they do not establish all earlier releases,
 other Python implementations, extension build toolchains or uv manager epochs.
+
+`--native-uv-epoch uv-0.3.0` additionally selects the pinned package fixture in
+`tests/sdk/`. uv 0.3.0 has project lock/install APIs but no build, export or
+publish commands; a separate helper supplies those frontends without replacing
+the native resolver. The regression checks the environment creator's uv version,
+the installed graph and metadata, publication dry-run, and dependency addition
+and removal while retaining the Nix input. Initial native lock bytes and supplied
+source identity must survive helper operations. Package fixtures are executed
+test points, not a version whitelist or an inferred compatibility range.
 
 ## Credits
 

@@ -119,3 +119,35 @@ jobs:
             .python-epochs/report.json
             .python-epochs/commands.log
             epoch-target.json
+
+  native-manager-epoch:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - uses: actions/checkout@v5
+        with:
+          repository: nix-purifiers/purifier
+          ref: 09a2da5af5b163ae3237eb39bbafd5da5899e296
+          path: .epoch-shared
+      - name: Preserve the uv 0.3 resolver with independent helper and target Python
+        run: |
+          nix flake archive --json github:NixOS/nixpkgs/205fd4226592cc83fd4c0885a3e4c9c400efabb5 > epoch-target.json
+          python3 -B tests/composition-epochs.py \
+            --target-nixpkgs "$(jq -r .path epoch-target.json)" \
+            --python-attribute python38 --native-uv-epoch uv-0.3.0 \
+            --shared-library .epoch-shared --state-root .native-uv-epoch
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-uv-epoch-${{ matrix.runner }}
+          include-hidden-files: true
+          path: |
+            .native-uv-epoch/report.json
+            .native-uv-epoch/commands.log
+            epoch-target.json

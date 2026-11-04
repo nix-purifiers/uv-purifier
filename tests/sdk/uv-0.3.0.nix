@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MIT
 # First uv project-management API epoch; a test input, not a support whitelist.
 {
-  lib,
   stdenvNoCC,
   stdenv,
   fetchzip,

@@ -1057,6 +1057,8 @@ def prefetch(root, lockfile, inputs=None):
 
     def uv(*args):
         command = helper_uv() if args[0] == 'export' else 'uv'
+        # These installs consume the selected lock/projection. Reapplying
+        # project resolver overrides here breaks old uv's hash-checking mode.
         config = ['--no-config'] if args[0] == 'pip' else []
         result = subprocess.run([command, *config, *args], cwd=root, env=environment, check=False)
         if result.returncode != 0:

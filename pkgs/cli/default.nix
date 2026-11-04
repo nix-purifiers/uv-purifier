@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: MIT
 #
-# The `uv-purifier` command. It runs with the uv of this package set, which
-# is also the uv that buildUvProject runs, so `uv-purifier lock` checks
-# uv.lock with the uv that will build from it. `publish` builds with the
-# Nix library and the nixpkgs of this package set.
+# The host `uv` handles build/export/publication frontends. `nativeUv` owns
+# project resolution and installation, and defaults to that same package.
+# Both immutable package identities propagate into CLI-triggered Nix builds.
 {
   lib,
   stdenvNoCC,

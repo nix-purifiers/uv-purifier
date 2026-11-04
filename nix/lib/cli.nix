@@ -79,7 +79,9 @@ let
   );
 
   buildUvProject = pkgs.callPackage ./build-uv-project.nix (
-    { purifier = import purifier { inherit lib; }; }
+    {
+      purifier = import purifier { inherit lib; };
+    }
     // lib.optionalAttrs (uvHelperPackage != null) { uv = builtins.storePath uvHelperPackage; }
   );
   projectSrc = source root;
