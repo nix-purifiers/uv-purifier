@@ -194,6 +194,14 @@ let
   wheelTarget = {
     inherit (python) pythonVersion;
   }
+  //
+    lib.optionalAttrs
+      (python.freeThreaded
+        or (lib.any (tag: builtins.match "cp[0-9]+t" tag != null) (python.pythonABITags or [ ]))
+      )
+      {
+        freeThreaded = true;
+      }
   // (
     if platform.isDarwin then
       {

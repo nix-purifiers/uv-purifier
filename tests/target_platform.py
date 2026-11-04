@@ -12,8 +12,9 @@ def check(run, state, snapshot, target_expression, python, helper_uv, system, sh
     directory = state / 'platform-admission'
     directory.mkdir()
     facts = json.loads(run(python, '-I', '-c',
-        'import json,os,platform,sys;print(json.dumps(dict('
+        'import json,os,platform,sys,sysconfig;print(json.dumps(dict('
         'libc=os.confstr("CS_GNU_LIBC_VERSION").split()[1],'
+        'freeThreaded=bool(sysconfig.get_config_var("Py_GIL_DISABLED")),'
         'arch=platform.machine(),minor="%d%d" % sys.version_info[:2])))'))
     libc_minor = int(facts['libc'].split('.')[1])
     api = runpy.run_path(str(Path(snapshot) / 'src/uv_purifier.py'))
@@ -22,20 +23,27 @@ def check(run, state, snapshot, target_expression, python, helper_uv, system, sh
     (fixture / 'pyproject.toml').write_text('[project]\nname="probe-root"\nversion="1.0"\ndependencies=["target-probe==1.0"]\n')
     run(helper_uv, 'venv', '--python', python, directory / 'venv')
     observations = {}
-    for compatible, minimum in ((False, libc_minor + 1), (True, libc_minor)):
-        tag = f'cp{facts["minor"]}-cp{facts["minor"]}-manylinux_2_{minimum}_{facts["arch"]}'
-        wheel = directory / f'target_probe-1.0-{tag}.whl'
+    abi = 'cp' + facts['minor'] + ('t' if facts['freeThreaded'] else '')
+    other_abi = 'cp' + facts['minor'] + ('' if facts['freeThreaded'] else 't')
+    for compatible, minimum, candidate_abi in (
+        (False, libc_minor + 1, abi), (True, libc_minor, abi),
+        (False, libc_minor, other_abi), (not facts['freeThreaded'], libc_minor, 'abi3'),
+    ):
+        tag = f'cp{facts["minor"]}-{candidate_abi}-manylinux_2_{minimum}_{facts["arch"]}'
+        wheelhouse = directory / tag
+        wheelhouse.mkdir()
+        wheel = wheelhouse / f'target_probe-1.0-{tag}.whl'
         with zipfile.ZipFile(wheel, 'w') as archive:
             archive.writestr('target_probe.py', 'answer=42\n')
             archive.writestr('target_probe-1.0.dist-info/METADATA', 'Metadata-Version: 2.1\nName: target-probe\nVersion: 1.0\n')
             archive.writestr('target_probe-1.0.dist-info/WHEEL', f'Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: {tag}\n')
             archive.writestr('target_probe-1.0.dist-info/RECORD', '')
-        native = subprocess.run([str(helper_uv), '--no-config', 'pip', 'install', '--offline', '--no-index',
-                                 '--python', str(directory / 'venv/bin/python'), str(wheel)],
+        native = subprocess.run([str(helper_uv), '--no-config', 'pip', 'install', '--reinstall', '--offline', '--no-index',
+                                 '--python', str(directory / 'venv/bin/python'), '--find-links', str(wheelhouse), 'target-probe==1.0'],
                                 env=env, text=True, capture_output=True)
         assert (native.returncode == 0) == compatible, native.stderr
         if not compatible:
-            assert 'incompatible with the current platform' in native.stderr, native.stderr
+            assert 'No solution found' in native.stderr, native.stderr
         else:
             assert run(directory / 'venv/bin/python', '-I', '-c', 'import target_probe;print(target_probe.answer)') == '42'
         digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
@@ -57,7 +65,7 @@ def check(run, state, snapshot, target_expression, python, helper_uv, system, sh
             'cli': prefix + 'in (import (f.outPath+"/nix/lib/cli.nix") {'
                 'nixpkgs=f.inputs.nixpkgs.outPath;purifier=' + shared + ';src=' + json.dumps(str(fixture)) + ';'
                 'pythonVersion=t.pythonVersion;pythonInterpreter=t.interpreter;pythonGlibcVersion=' +
-                json.dumps(facts['libc']) + ';}).drvPath',
+                json.dumps(facts['libc']) + ';pythonFreeThreaded=' + json.dumps(facts['freeThreaded']) + ';}).drvPath',
         }.items():
             result = subprocess.run(['nix', 'eval', '--impure', '--raw', '--expr', expression], env=env,
                                     text=True, capture_output=True)
@@ -66,4 +74,4 @@ def check(run, state, snapshot, target_expression, python, helper_uv, system, sh
                 assert 'no wheel of target-probe==1.0 installs' in result.stderr, result.stderr
             observations[f'{tag}:{kind}'] = {'admitted': compatible, 'nativeAdmitted': native.returncode == 0}
     return {'target': facts, 'observations': observations,
-            'scope': 'wheel platform admission; payload is pure Python, no compiled ABI credit'}
+            'scope': 'wheel platform and ABI tag admission; payload is pure Python, no compiled ABI credit'}
