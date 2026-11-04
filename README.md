@@ -439,6 +439,12 @@ outgoing projection with ordinary uv using a fresh offline cache. Capture uses
 the network; this is not a full host network-namespace isolation test. CI runs
 it on both supported Linux architectures.
 
+The lifecycle regression also adds and drops an ordinary registry dependency
+while retaining a Nix input, and drops the final dependency without any Nix
+inputs. It checks runtime and installed metadata cleanup, unchanged locks and
+provided source identity, and preservation of an existing ordinary downstream.
+Use `--state-root <directory>` to contain its scratch files and caches.
+
 `tests/composition-epochs.py` separates the helper, native uv and target Python.
 It locks a project with a compiled dependency, builds a producer, consumes it as
 an explicit Nix input, prepares the interactive environment, builds a consumer
