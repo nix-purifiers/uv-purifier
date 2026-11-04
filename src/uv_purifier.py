@@ -362,6 +362,15 @@ def run_uv(args, cwd, env=None):
     return result
 
 
+def helper_uv():
+    return os.environ.get('UV_PURIFIER_HELPER_UV', 'uv')
+
+
+def run_helper_uv(args, cwd, env=None):
+    return subprocess.run([helper_uv(), *args], cwd=cwd, env=env,
+                          text=True, capture_output=True, check=False)
+
+
 def resolve_build_requirements(requires, requires_python, index_config, constraints, workdir):
     """Resolves one set of build requirements for every platform, by locking
     a throwaway project that depends on them. A package that uv.lock pins
@@ -480,7 +489,7 @@ def member_outputs(root, name, workdir):
     include scripts that a setup.py defines)."""
     out = tempfile.mkdtemp(dir=workdir)
     log(f"building {name} to record its outputs")
-    result = run_uv(["build", "--package", name, "--out-dir", out], cwd=root)
+    result = run_helper_uv(["build", "--package", name, "--out-dir", out], cwd=root)
     if result.returncode != 0:
         raise Error(f"`uv build --package {name}` failed:\n{result.stderr.strip()}")
     files = sorted(n for n in os.listdir(out) if n != ".gitignore")
@@ -665,7 +674,9 @@ def native_lock(root, lockfile, upgrade=False):
     as of the time the lockfile it replaces records."""
     global EXCLUDE_NEWER
     uv_lock_path = os.path.join(root, "uv.lock")
-    check = run_uv(["lock", "--check", "--quiet"], cwd=root)
+    help_result = run_uv(["lock", "--help"], cwd=root)
+    check_flag = '--check' if re.search(r'(?m)^\s+--check(?:\s|,|$)', help_result.stdout) else '--locked'
+    check = run_uv(["lock", check_flag, "--quiet"], cwd=root)
     if not os.path.exists(uv_lock_path) or check.returncode != 0:
         log("uv.lock is missing or does not match pyproject.toml; running `uv lock`")
         result = subprocess.run(["uv", "lock"], cwd=root, check=False)
@@ -936,6 +947,10 @@ def nix_build(root, lockfile, package=None, out_link=None):
     # sets absent from the helper's nixpkgs. Never infer a different patch release.
     if selected_python['executable'].startswith('/nix/store/'):
         args += ["--argstr", "pythonInterpreter", selected_python['executable']]
+    for variable, argument in [('UV_PURIFIER_NATIVE_UV_PACKAGE', 'nativeUvPackage'),
+                               ('UV_PURIFIER_HELPER_UV_PACKAGE', 'uvHelperPackage')]:
+        if os.environ.get(variable):
+            args += ['--argstr', argument, os.environ[variable]]
     if os.path.abspath(lockfile) != os.path.join(root, LOCK_FILE):
         args += ["--argstr", "lockFile", os.path.abspath(lockfile)]
     if package is not None:
@@ -1041,7 +1056,9 @@ def prefetch(root, lockfile, inputs=None):
     python = os.path.join(venv, "bin", "python")
 
     def uv(*args):
-        result = subprocess.run(["uv", *args], cwd=root, env=environment, check=False)
+        command = helper_uv() if args[0] == 'export' else 'uv'
+        config = ['--no-config'] if args[0] == 'pip' else []
+        result = subprocess.run([command, *config, *args], cwd=root, env=environment, check=False)
         if result.returncode != 0:
             raise Error(f"`uv {' '.join(args)}` failed")
 
@@ -1051,7 +1068,7 @@ def prefetch(root, lockfile, inputs=None):
         wheels = os.path.join(workdir, "wheels.txt")
         effective = os.path.join(inputs, "project")
         project_args = ["--project", effective] if os.path.isdir(effective) else []
-        uv("export", *project_args, "--frozen", "--all-packages", "--no-emit-workspace",
+        uv("export", *project_args, "--offline", "--frozen", "--all-packages", "--no-emit-workspace",
            "--format", "requirements.txt", "--output-file", exported)
         result = subprocess.run(
             [sys.executable, "-I", os.path.join(inputs, "split_requirements.py"),
@@ -1061,13 +1078,14 @@ def prefetch(root, lockfile, inputs=None):
         if result.returncode != 0:
             raise Error("splitting the exported requirements failed")
         if not os.path.exists(python):
-            uv("venv", "--python", os.path.join(inputs, "python"), venv)
+            uv("venv", "--no-python-downloads", "--python", os.path.join(inputs, "python"), venv)
         # An empty registry subset is intentional when all remaining runtime
         # wheels are supplied by Nix, or the project dropped its last dependency.
         # uv otherwise leaves stale packages in this managed environment.
         with open(requirements) as resolved:
             empty = not any(line.strip() and not line.lstrip().startswith("#") for line in resolved)
-        sync = ["pip", "sync", "--python", python, "--require-hashes"]
+        sync = ["pip", "sync", "--offline", "--no-index", "--find-links", os.path.join(inputs, "wheelhouse"),
+                "--python", python, "--require-hashes"]
         if empty:
             sync.append("--allow-empty-requirements")
         uv(*sync, requirements)
@@ -1078,11 +1096,12 @@ def prefetch(root, lockfile, inputs=None):
                     for n in sorted(os.listdir(directory))
                     if n.endswith(".whl")
                 ]
-                uv("pip", "install", "--python", python, "--no-deps", *files)
+                uv("pip", "install", "--offline", "--no-index", "--python", python, "--no-deps", *files)
         trees = editable_trees(root)
         if trees:
             editables = [a for tree in trees for a in ("--editable", tree)]
-            uv("pip", "install", "--python", python, "--no-deps", *editables)
+            uv("pip", "install", "--offline", "--no-index", "--find-links", os.path.join(inputs, "wheelhouse"),
+               "--python", python, "--no-deps", *editables)
     log(f"installed {venv}; run commands in it with `uv run --no-sync`")
 
 
@@ -1109,7 +1128,7 @@ def publish(root, lockfile, packages, uv_publish_args):
         if name in unique and Path(unique[name]).read_bytes() != Path(file).read_bytes():
             raise Error(f"conflicting projected wheel publication: {name}")
         unique[name] = file
-    result = subprocess.run(["uv", "publish", *uv_publish_args, *unique.values()], cwd=root, check=False)
+    result = subprocess.run([helper_uv(), "publish", *uv_publish_args, *unique.values()], cwd=root, check=False)
     if result.returncode != 0:
         raise Error("uv publish failed")
 
