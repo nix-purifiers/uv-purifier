@@ -5,6 +5,7 @@
 Needs Nix and networked capture, like composition-native.py. Every state is
 built in the Nix sandbox and its projection consumed with ordinary native uv.
 """
+import argparse
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,18 @@ def run(*args, env=None):
     return subprocess.check_output([str(arg) for arg in args], text=True, env=env).strip()
 
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--state-root', type=Path, help='keep scratch and caches under this explicit directory')
+args = parser.parse_args()
+if args.state_root:
+    state = args.state_root.resolve()
+    state.mkdir(parents=True, exist_ok=True)
+    tempfile.tempdir = str(state)
+    os.environ['TMPDIR'] = str(state)
+    for name in ('cache', 'config', 'state'):
+        (state / name).mkdir(exist_ok=True)
+        os.environ['XDG_' + name.upper() + '_HOME'] = str(state / name)
+    os.environ['UV_CACHE_DIR'] = str(state / 'uv-cache')
 root = Path(__file__).resolve().parents[1]
 system = run('nix', 'eval', '--impure', '--raw', '--expr', 'builtins.currentSystem')
 snapshot = json.loads(run('nix', 'flake', 'metadata', '--json', '--no-write-lock-file',
@@ -45,11 +58,14 @@ with tempfile.TemporaryDirectory(prefix='uv-lifecycle-') as directory:
     version = '25.2.0'
     extra_dependency = False
     extra_buildable = False
+    ordinary_under_nix = False
 
     def manifest():
         dependencies = ['attrs==' + version]
         if extra_dependency:
             dependencies.append('docopt==0.6.2')
+        if ordinary_under_nix:
+            dependencies.append('six==1.17.0')
         definition.write_text('''[project]
 name = "lifecycle-app"
 version = "1.0"
@@ -71,6 +87,14 @@ build-backend = "hatchling.build"
 
     def names():
         return {package['name'] for package in tomllib.loads((project / 'uv.lock').read_text())['package']}
+
+    def six_state(environment, expected, distribution='lifecycle-app'):
+        state = json.loads(run(environment / 'bin/python', '-I', '-c',
+            'import importlib.util,json; from importlib.metadata import requires,version; '
+            'print(json.dumps({"installed":importlib.util.find_spec("six") is not None,'
+            '"requirements":requires(' + repr(distribution) + ') or []}))'))
+        assert state['installed'] == expected, state
+        assert any(requirement.lower().startswith('six') for requirement in state['requirements']) == expected, state
 
     def prove(label, nix_origin=False):
         expression = '''let
@@ -108,9 +132,13 @@ build-backend = "hatchling.build"
         if nix_origin:
             assert attrs['source']['path'].startswith('/nix/store/'), attrs
         # The editable developer environment must change along with the locks.
+        before_prefetch = [(project / name).read_bytes() for name in ('uv.lock', 'uv-purifier.lock.json')]
         run(cli, 'prefetch', '--project', project,
-            env=dict(os.environ, XDG_CACHE_HOME=str(temporary / 'development-cache')))
+            env=dict(os.environ, UV_PROJECT_ENVIRONMENT=str(project / '.venv'),
+                     XDG_CACHE_HOME=str(temporary / 'development-cache')))
+        assert before_prefetch == [(project / name).read_bytes() for name in ('uv.lock', 'uv-purifier.lock.json')]
         assert run(project / '.venv/bin/lifecycle-app') == 'attrs=' + version
+        six_state(project / '.venv', ordinary_under_nix)
         installed = run(project / '.venv/bin/python', '-c',
             'import importlib.util; print(importlib.util.find_spec("extra_app") is not None)')
         assert (installed == 'True') == extra_buildable, installed
@@ -137,6 +165,7 @@ build-backend = "hatchling.build"
         present = run(downstream / 'bin/python', '-c',
                       'import importlib.util; print(importlib.util.find_spec("docopt") is not None)')
         assert (present == 'True') == extra_dependency, 'outgoing dependency graph differs from manifest'
+        six_state(downstream, ordinary_under_nix)
         print('PASS uv.lifecycle.' + label, flush=True)
 
     manifest()
@@ -154,6 +183,15 @@ build-backend = "hatchling.build"
     before = (project / 'uv.lock').read_bytes()
     lock()
     assert (project / 'uv.lock').read_bytes() == before
+    provided = json.loads((project / 'uv-purifier.lock.json').read_text())['projectInputs']
+    for label, ordinary_under_nix in [('add-registry-with-nix', True), ('drop-registry-with-nix', False)]:
+        manifest()
+        lock()
+        assert json.loads((project / 'uv-purifier.lock.json').read_text())['projectInputs'] == provided
+        assert ('six' in names()) == ordinary_under_nix
+        prove(label, nix_origin=True)
+    # Sync owns the development environment, not an existing ordinary consumer.
+    six_state(temporary / 'downstream-add-registry-with-nix', True)
     lock('--no-inputs')
     result = json.loads((project / 'uv-purifier.lock.json').read_text())
     assert not result.get('projectInputs'), 'removed Nix origin retained in purifier lock'
@@ -191,3 +229,35 @@ build-backend = "hatchling.build"
     lock()
     assert 'extra-app' not in names(), 'dropped workspace member retained in native lock'
     prove('drop-buildable')
+
+    # Dropping the final registry dependency is also an intentional empty sync
+    # without Nix inputs. Use a separate managed environment to check its scope.
+    empty = temporary / 'empty-project'
+    (empty / 'src/empty_app').mkdir(parents=True)
+    (empty / 'src/empty_app/__init__.py').write_text('def main():\n    print("empty")\n')
+    managed = temporary / 'empty-managed'
+    empty_env = dict(os.environ, UV_PROJECT_ENVIRONMENT=str(managed),
+                     XDG_CACHE_HOME=str(temporary / 'empty-cache'))
+    for dependency in (True, False):
+        empty_definition = '''[project]
+name = "empty-app"
+version = "1.0"
+requires-python = ">=3.12"
+dependencies = ''' + json.dumps(['six==1.17.0'] if dependency else []) + '''
+[project.scripts]
+empty-app = "empty_app:main"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+'''
+        (empty / 'pyproject.toml').write_text(empty_definition)
+        run(cli, 'lock', '--project', empty, env=empty_env)
+        assert not json.loads((empty / 'uv-purifier.lock.json').read_text()).get('projectInputs')
+        empty_locks = [(empty / name).read_bytes() for name in ('uv.lock', 'uv-purifier.lock.json')]
+        run(cli, 'prefetch', '--project', empty, env=empty_env)
+        assert empty_locks == [(empty / name).read_bytes() for name in ('uv.lock', 'uv-purifier.lock.json')]
+        assert (empty / 'pyproject.toml').read_text() == empty_definition
+        six_state(managed, dependency, distribution='empty-app')
+        assert run(managed / 'bin/empty-app') == 'empty'
+        six_state(temporary / 'downstream-add-registry-with-nix', True)
+    print('PASS uv.lifecycle.empty-registry-without-inputs', flush=True)

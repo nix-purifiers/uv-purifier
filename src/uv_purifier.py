@@ -1062,7 +1062,15 @@ def prefetch(root, lockfile, inputs=None):
             raise Error("splitting the exported requirements failed")
         if not os.path.exists(python):
             uv("venv", "--python", os.path.join(inputs, "python"), venv)
-        uv("pip", "sync", "--python", python, "--require-hashes", requirements)
+        # An empty registry subset is intentional when all remaining runtime
+        # wheels are supplied by Nix, or the project dropped its last dependency.
+        # uv otherwise leaves stale packages in this managed environment.
+        with open(requirements) as resolved:
+            empty = not any(line.strip() and not line.lstrip().startswith("#") for line in resolved)
+        sync = ["pip", "sync", "--python", python, "--require-hashes"]
+        if empty:
+            sync.append("--allow-empty-requirements")
+        uv(*sync, requirements)
         with open(wheels) as f:
             for directory in f.read().split():
                 files = [
