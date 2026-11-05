@@ -19,6 +19,7 @@ def main():
     parser.add_argument('--shared-library', type=Path, help='explicit shared-library candidate; recorded separately')
     parser.add_argument('--native-uv-epoch', help='explicit package fixture from tests/sdk, independent of helper and Python')
     parser.add_argument('--compiled-dependency-version', default='2.1.5', help='explicit MarkupSafe fixture version; recorded in the receipt')
+    parser.add_argument('--sandwiches', action='store_true', help='exercise an ordinary republisher between purifier users and its own conflicting constraint')
     args = parser.parse_args()
     if not re.fullmatch(r'python[A-Za-z0-9_]+', args.python_attribute):
         parser.error('expected an explicit Python package attribute')
@@ -36,7 +37,7 @@ def main():
                UV_CACHE_DIR=str(state / 'cache/uv'))
     env.pop('UV_PROJECT_ENVIRONMENT', None)
     report = {'version': 1, 'scope': 'exact Python target/helper tuple; no inferred intervals',
-              'fixtureParameters': {'markupsafe': args.compiled_dependency_version},
+              'fixtureParameters': {'markupsafe': args.compiled_dependency_version, 'sandwiches': args.sandwiches},
               'cacheProfile': 'cold-native-cache',
               'driverDigest': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               'targetNixpkgs': str(args.target_nixpkgs.resolve()),
@@ -48,11 +49,16 @@ def main():
                            'dependency-add-with-nix', 'dependency-drop-with-nix')}}
     active = 'target-runtime'
     extra_dependency = False
+    if args.sandwiches:
+        report['results'].update({name: {'status': 'not-run'} for name in
+            ('ordinary-republisher', 'ordinary-own-eviction-conflict', 'nix-ordinary-nix-sandwich',
+             'ordinary-nix-ordinary-sandwich')})
 
     def save():
         report['fixtureLockDigests'] = {
             str(path.relative_to(state)): hashlib.sha256(path.read_bytes()).hexdigest()
-            for name in ('epoch_provider', 'epoch_consumer')
+            for name in ('epoch_provider', 'epoch_consumer', 'ordinary_middle',
+                         'ordinary-eviction-control', 'epoch_final')
             for filename in ('uv.lock', 'uv-purifier.lock.json', 'flake.lock')
             if (path := state / name / filename).is_file()
         }
@@ -142,7 +148,7 @@ def main():
             (Path(snapshot) / 'tests/target_platform.py').read_bytes()).hexdigest()
         passed(active)
 
-        def native_environment(directory, consumer=False, published=False):
+        def native_environment(directory, consumer=False, published=False, extra_packages=()):
             assert (run(directory / 'bin/python', '-I', '-c',
                 'import sysconfig;print(bool(sysconfig.get_config_var("Py_GIL_DISABLED")))') == 'True') == target_free_threaded
             if target_free_threaded:
@@ -154,6 +160,7 @@ def main():
             records = [Parser().parsestr(path.read_text()) for path in site.glob('*.dist-info/METADATA')]
             graph = {record['Name'].lower().replace('_', '-'): record['Version'] for record in records}
             expected = {'epoch-provider', 'markupsafe'} | ({'epoch-consumer'} if consumer else set())
+            expected.update(extra_packages)
             if consumer and extra_dependency:
                 expected.add('attrs')
             assert set(graph) == expected and len(records) == len(graph), graph
@@ -174,6 +181,7 @@ def main():
                 'packages': graph, 'requirements': requirements,
                 'nativeManager': configuration['uv'],
             }
+            return graph
 
         def project(name, dependencies):
             directory = state / name
@@ -254,8 +262,119 @@ def main():
             '--find-links', repository, 'epoch-consumer')
         assert run(ordinary / 'bin/epoch_consumer') == 'target=' + minor
         run(ordinary / 'bin/python', '-I', '-c', 'import epoch_provider,markupsafe._speedups')
-        native_environment(ordinary, consumer=True, published=True)
+        original_ordinary_graph = native_environment(ordinary, consumer=True, published=True)
         passed(active)
+        if args.sandwiches:
+            active = 'ordinary-republisher'
+            middle = state / 'ordinary_middle'
+            (middle / 'src/ordinary_middle').mkdir(parents=True)
+            (middle / 'src/ordinary_middle/__init__.py').write_text('import epoch_consumer\n')
+            published_version = run(ordinary / 'bin/python', '-I', '-c',
+                'from importlib.metadata import version;print(version("epoch-consumer"))')
+            middle_definition = ('[project]\nname="ordinary-middle"\nversion="1.0"\nrequires-python=' +
+                json.dumps('>=' + minor + ',<3.' + next_minor) + '\ndependencies=' +
+                json.dumps(['epoch-consumer==' + published_version]) +
+                '\n[build-system]\nrequires=["hatchling==1.18.0"]\nbuild-backend="hatchling.build"\n')
+            (middle / 'pyproject.toml').write_text(middle_definition)
+            run(helper_uv, 'lock', '--offline', '--no-index', '--find-links', repository, '--python', python, cwd=middle)
+            middle_lock = (middle / 'uv.lock').read_bytes()
+            run(helper_uv, 'venv', '--python', python, middle / '.venv')
+            run(helper_uv, 'pip', 'install', '--offline', '--no-index', '--python', middle / '.venv/bin/python',
+                '--find-links', repository, 'epoch-consumer==' + published_version)
+            native_environment(middle / '.venv', consumer=True, published=True)
+            run(helper_uv, 'build', '--wheel', '--python', python, '--out-dir', middle / 'dist', cwd=middle)
+            middle_wheel, = (middle / 'dist').glob('*.whl')
+            report['ordinaryPublication'] = {'wheel': middle_wheel.name,
+                'sha256': hashlib.sha256(middle_wheel.read_bytes()).hexdigest(),
+                'upstreamVersion': published_version}
+            assert (middle / 'pyproject.toml').read_text() == middle_definition
+            assert (middle / 'uv.lock').read_bytes() == middle_lock
+            assert not (middle / 'uv-purifier.lock.json').exists()
+            assert not (middle / 'flake.nix').exists()
+            passed(active)
+
+            active = 'ordinary-own-eviction-conflict'
+            # Make the requested alternative genuinely resolvable on its own;
+            # otherwise an empty candidate set would mask missing transitive pins.
+            alternatives = state / 'ordinary-alternative-wheels'
+            alternatives.mkdir()
+            import zipfile
+            with zipfile.ZipFile(alternatives / 'markupsafe-99.0-py3-none-any.whl', 'w') as wheel:
+                wheel.writestr('markupsafe/__init__.py', 'fixture_origin="ordinary-alternative"\n')
+                wheel.writestr('markupsafe-99.0.dist-info/METADATA',
+                    'Metadata-Version: 2.1\nName: MarkupSafe\nVersion: 99.0\n')
+                wheel.writestr('markupsafe-99.0.dist-info/WHEEL',
+                    'Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n')
+                wheel.writestr('markupsafe-99.0.dist-info/RECORD', '')
+            control = state / 'ordinary-eviction-control'
+            control.mkdir()
+            (control / 'pyproject.toml').write_text(
+                '[project]\nname="alternative-control"\nversion="1.0"\ndependencies=["markupsafe==99.0"]\n')
+            run(helper_uv, 'lock', '--offline', '--no-index', '--find-links', alternatives,
+                '--python', python, cwd=control)
+            assert 'version = "99.0"' in (control / 'uv.lock').read_text()
+            report['ordinaryAlternative'] = {'version': '99.0',
+                'scope': 'synthetic pure wheel, positively resolved only as a constraint-conflict control'}
+            conflicting_definition = middle_definition.replace(
+                'dependencies=' + json.dumps(['epoch-consumer==' + published_version]),
+                'dependencies=' + json.dumps(['epoch-consumer==' + published_version,
+                                             'markupsafe==99.0']))
+            (middle / 'pyproject.toml').write_text(conflicting_definition)
+            conflict = subprocess.run([str(helper_uv), 'lock', '--offline', '--no-index', '--find-links',
+                str(repository), '--find-links', str(alternatives), '--python', str(python)],
+                cwd=middle, env=env, text=True, capture_output=True)
+            assert conflict.returncode and 'No solution found' in conflict.stderr, conflict.stderr
+            assert args.compiled_dependency_version in conflict.stderr and '99.0' in conflict.stderr, conflict.stderr
+            assert (middle / 'uv.lock').read_bytes() == middle_lock, 'failed eviction rewrote ordinary lock'
+            native_environment(middle / '.venv', consumer=True, published=True)
+            (middle / 'pyproject.toml').write_text(middle_definition)
+            report['ordinaryEvictionDiagnostic'] = conflict.stderr
+            passed(active)
+
+            active = 'nix-ordinary-nix-sandwich'
+            final = project('epoch_final', ['ordinary-middle==1.0'])
+            (final / 'vendor').mkdir()
+            import shutil
+            shutil.copyfile(middle_wheel, final / 'vendor' / middle_wheel.name)
+            with (final / 'pyproject.toml').open('a') as definition:
+                definition.write('\n[tool.uv.sources]\nordinary-middle={path=' +
+                                 json.dumps('vendor/' + middle_wheel.name) + '}\n')
+            final_manifest = (final / 'pyproject.toml').read_bytes()
+            run(cli, 'lock', '--project', final, '--input', 'path:' + str(consumer) + '#default')
+            final_locks = [(final / name).read_bytes() for name in ('uv.lock', 'uv-purifier.lock.json')]
+            run(cli, 'prefetch', '--project', final)
+            assert (final / 'pyproject.toml').read_bytes() == final_manifest
+            assert final_locks == [(final / name).read_bytes() for name in ('uv.lock', 'uv-purifier.lock.json')]
+            native_environment(final / '.venv', consumer=True, published=True,
+                               extra_packages=('ordinary-middle', 'epoch-final'))
+            final_package = Path(run('nix', 'build', 'path:' + str(final) + '#default',
+                '--out-link', state / 'sandwich-final', '--print-out-paths'))
+            final_graph = native_environment(final_package, consumer=True, published=True,
+                                             extra_packages=('ordinary-middle', 'epoch-final'))
+            assert final_graph['ordinary-middle'] == final_graph['epoch-final'] == '1.0', final_graph
+            assert run(final_package / 'bin/epoch_final') == 'target=' + minor
+            run(final_package / 'bin/python', '-I', '-c', 'import ordinary_middle,epoch_consumer,epoch_provider')
+            passed(active)
+            active = 'ordinary-nix-ordinary-sandwich'
+            middle_wheel_digest = hashlib.sha256(middle_wheel.read_bytes()).hexdigest()
+            final_repository = Path(run('nix', 'build', 'path:' + str(final) + '#default.projections.python',
+                '--out-link', state / 'sandwich-final-projection', '--print-out-paths'))
+            ordinary_final = state / 'ordinary-final'
+            run(uv, 'venv', '--python', python, ordinary_final)
+            run(uv, 'pip', 'install', '--offline', '--no-index', '--python', ordinary_final / 'bin/python',
+                '--find-links', final_repository, 'epoch-final')
+            final_ordinary_graph = native_environment(ordinary_final, consumer=True, published=True,
+                extra_packages=('ordinary-middle', 'epoch-final'))
+            for name in ('ordinary-middle', 'epoch-final'):
+                assert '+nix.' in final_ordinary_graph[name], final_ordinary_graph
+            for name in original_ordinary_graph:
+                assert final_ordinary_graph[name] == original_ordinary_graph[name], (name, final_ordinary_graph)
+            run(ordinary_final / 'bin/python', '-I', '-c', 'import ordinary_middle,epoch_final,epoch_consumer,epoch_provider')
+            assert middle_wheel_digest == hashlib.sha256(middle_wheel.read_bytes()).hexdigest()
+            assert (middle / 'uv.lock').read_bytes() == middle_lock
+            assert (middle / 'pyproject.toml').read_text() == middle_definition
+            native_environment(ordinary, consumer=True, published=True)
+            passed(active)
         supplied = json.loads((consumer / 'uv-purifier.lock.json').read_text())['projectInputs']
         for label, extra_dependency in [('dependency-add-with-nix', True), ('dependency-drop-with-nix', False)]:
             active = label
