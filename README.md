@@ -523,6 +523,13 @@ successfully on its own, so a failed joint resolution cannot pass merely
 because the alternate version is unavailable. The synthetic version is a
 resolver fixture and adds no SDK or compiled extension support credit.
 
+`--multiple-inputs` composes two Nix inputs that share the compiled transitive
+dependency, repeats the graph with the input order reversed, and checks both
+interactive and pure environments. Adding a third, competing Nix provider
+must fail without changing manifests, locks or the existing environment.
+Explicit `--input` arguments supply the complete requested set; omitting them
+retains the recorded set. These scenarios can run together with `--sandwiches`.
+
 ## Credits
 
 The purifier idea was inspired by nixcloud's

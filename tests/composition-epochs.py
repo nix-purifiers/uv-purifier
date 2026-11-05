@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--native-uv-epoch', help='explicit package fixture from tests/sdk, independent of helper and Python')
     parser.add_argument('--compiled-dependency-version', default='2.1.5', help='explicit MarkupSafe fixture version; recorded in the receipt')
     parser.add_argument('--sandwiches', action='store_true', help='exercise an ordinary republisher between purifier users and its own conflicting constraint')
+    parser.add_argument('--multiple-inputs', action='store_true', help='compose two Nix inputs with a shared transitive leaf, then reject a competing provider')
     args = parser.parse_args()
     if not re.fullmatch(r'python[A-Za-z0-9_]+', args.python_attribute):
         parser.error('expected an explicit Python package attribute')
@@ -37,7 +38,8 @@ def main():
                UV_CACHE_DIR=str(state / 'cache/uv'))
     env.pop('UV_PROJECT_ENVIRONMENT', None)
     report = {'version': 1, 'scope': 'exact Python target/helper tuple; no inferred intervals',
-              'fixtureParameters': {'markupsafe': args.compiled_dependency_version, 'sandwiches': args.sandwiches},
+              'fixtureParameters': {'markupsafe': args.compiled_dependency_version, 'sandwiches': args.sandwiches,
+                                    'multipleInputs': args.multiple_inputs},
               'cacheProfile': 'cold-native-cache',
               'driverDigest': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               'targetNixpkgs': str(args.target_nixpkgs.resolve()),
@@ -53,12 +55,16 @@ def main():
         report['results'].update({name: {'status': 'not-run'} for name in
             ('ordinary-republisher', 'ordinary-own-eviction-conflict', 'nix-ordinary-nix-sandwich',
              'ordinary-nix-ordinary-sandwich')})
+    if args.multiple_inputs:
+        report['results'].update({name: {'status': 'not-run'} for name in
+            ('multiple-inputs-shared-leaf', 'multiple-inputs-reversed', 'competing-input-preserves-state')})
 
     def save():
         report['fixtureLockDigests'] = {
             str(path.relative_to(state)): hashlib.sha256(path.read_bytes()).hexdigest()
             for name in ('epoch_provider', 'epoch_consumer', 'ordinary_middle',
-                         'ordinary-eviction-control', 'epoch_final')
+                         'ordinary-eviction-control', 'epoch_final', 'epoch_other',
+                         'epoch_multi', 'epoch_multi_reverse', 'competing-other')
             for filename in ('uv.lock', 'uv-purifier.lock.json', 'flake.lock')
             if (path := state / name / filename).is_file()
         }
@@ -377,6 +383,60 @@ def main():
             assert (middle / 'uv.lock').read_bytes() == middle_lock
             assert (middle / 'pyproject.toml').read_text() == middle_definition
             native_environment(ordinary, consumer=True, published=True)
+            passed(active)
+        if args.multiple_inputs:
+            active = 'multiple-inputs-shared-leaf'
+            other = project('epoch_other', ['markupsafe==' + args.compiled_dependency_version])
+            run(cli, 'lock', '--project', other)
+            input_uris = ['path:' + str(consumer) + '#default', 'path:' + str(other) + '#default']
+            graphs = []
+            for name, uris, label in (
+                ('epoch_multi', input_uris, 'multiple-inputs-shared-leaf'),
+                ('epoch_multi_reverse', list(reversed(input_uris)), 'multiple-inputs-reversed'),
+            ):
+                active = label
+                multi = project(name, ['epoch-consumer>=99', 'epoch-other>=99'])
+                definition = (multi / 'pyproject.toml').read_bytes()
+                run(cli, 'lock', '--project', multi, '--input', uris[0], '--input', uris[1])
+                locked = [(multi / file).read_bytes() for file in ('uv.lock', 'uv-purifier.lock.json')]
+                input_records = json.loads(locked[1])['projectInputs']
+                assert len(input_records) == 2, input_records
+                report.setdefault('multipleInputRecords', {})[label] = input_records
+                run(cli, 'prefetch', '--project', multi)
+                assert definition == (multi / 'pyproject.toml').read_bytes()
+                assert locked == [(multi / file).read_bytes() for file in ('uv.lock', 'uv-purifier.lock.json')]
+                graph = native_environment(multi / '.venv', consumer=True, published=True,
+                    extra_packages=('epoch-other', name.replace('_', '-')))
+                assert '+nix.' in graph['epoch-other'], graph
+                provided = {key: graph[key] for key in ('epoch-provider', 'epoch-consumer', 'epoch-other', 'markupsafe')}
+                graphs.append(provided)
+                pure = Path(run('nix', 'build', 'path:' + str(multi) + '#default',
+                    '--out-link', state / label, '--print-out-paths'))
+                pure_graph = native_environment(pure, consumer=True, published=True,
+                    extra_packages=('epoch-other', name.replace('_', '-')))
+                assert graph == pure_graph
+                run(pure / 'bin/python', '-I', '-c', 'import epoch_consumer,epoch_provider,epoch_other')
+                passed(active)
+            assert graphs[0] == graphs[1], graphs
+
+            active = 'competing-input-preserves-state'
+            import shutil
+            competing = state / 'competing-other'
+            shutil.copytree(other, competing, ignore=shutil.ignore_patterns('.venv', '.uv-purifier', '__pycache__'))
+            with (competing / 'src/epoch_other/__init__.py').open('a') as changed:
+                changed.write('\nfixture_variant="competing-nix-provider"\n')
+            before = [(multi / file).read_bytes() for file in ('pyproject.toml', 'uv.lock', 'uv-purifier.lock.json')]
+            # Explicit --input arguments describe the complete requested set;
+            # keep both existing providers while adding the competing one.
+            conflict = subprocess.run([str(cli), 'lock', '--project', str(multi),
+                '--input', input_uris[0], '--input', input_uris[1], '--input',
+                'path:' + str(competing) + '#default'], env=env, text=True, capture_output=True)
+            assert conflict.returncode and 'conflicting Nix providers' in conflict.stderr, conflict.stderr
+            assert before == [(multi / file).read_bytes() for file in ('pyproject.toml', 'uv.lock', 'uv-purifier.lock.json')]
+            after = native_environment(multi / '.venv', consumer=True, published=True,
+                extra_packages=('epoch-other', 'epoch-multi-reverse'))
+            assert {key: after[key] for key in graphs[1]} == graphs[1]
+            report['competingInputDiagnostic'] = conflict.stderr
             passed(active)
         supplied = json.loads((consumer / 'uv-purifier.lock.json').read_text())['projectInputs']
         for label, extra_dependency in [('dependency-add-with-nix', True), ('dependency-drop-with-nix', False)]:
