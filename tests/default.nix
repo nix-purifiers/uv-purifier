@@ -45,6 +45,15 @@ let
   # and markupsafe installs its compiled wheel for the system.
   simple = build { src = ./fixtures/simple; };
 
+  nativeTestTool = pkgs.writeShellScriptBin "purifier-native-test-tool" ''
+    python -I -c 'import attrs; assert attrs.__version__ == "25.3.0"'
+  '';
+  withNativeTestTool = build {
+    src = ./fixtures/simple;
+    nativeCheckInputs = [ nativeTestTool ];
+    testCommand = [ "purifier-native-test-tool" ];
+  };
+
   # A virtual workspace root with two members: greeting (setuptools) and
   # app (flit-core), which depends on greeting and on six. Its test command
   # runs app's script.
@@ -134,6 +143,11 @@ let
 in
 {
   composition-producer = simple.packages.simple;
+  native-check-inputs =
+    assert withNativeTestTool.packages.simple.drvPath == simple.packages.simple.drvPath;
+    assert withNativeTestTool.release.drvPath == simple.release.drvPath;
+    assert withNativeTestTool.interactive.drvPath == simple.interactive.drvPath;
+    withNativeTestTool.tests;
   composition-producer-python312 =
     (build {
       src = ./fixtures/simple;

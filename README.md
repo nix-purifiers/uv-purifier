@@ -234,6 +234,10 @@ defines are included.
   `src`, such as `pathSources."../shared" = ../shared;`. A flake's source
   tree cannot reach outside itself. A path inside `src` needs no entry.
 - `testCommand`, the command of `tests`.
+- `nativeCheckInputs` (default `[]`), native commands available to `tests`,
+  for example `[ pkgs.less pkgs.which ]` when the upstream tests invoke them.
+  Python test dependencies still come from the project's locked uv dependency
+  groups. These native tools do not change packages, releases or projections.
 
 Metadata conversion runs on the builder's helper `python3`, independently of
 this project interpreter. A historical interpreter can come from a separately
