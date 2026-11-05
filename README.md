@@ -512,6 +512,17 @@ and removal while retaining the Nix input. Initial native lock bytes and supplie
 source identity must survive helper operations. Package fixtures are executed
 test points, not a version whitelist or an inferred compatibility range.
 
+`--sandwiches` additionally builds a wheel with ordinary uv from a project
+that has no purifier lock or flake. It consumes a Nix publication, tries its
+own conflicting transitive version request, and publishes a wheel consumed by
+another purifier and then a fresh ordinary downstream. Both alternating
+publication chains check installed versions, metadata and compiled imports;
+the original publication bytes, lock and existing environment remain intact.
+The conflict control includes a synthetic alternate wheel that resolves
+successfully on its own, so a failed joint resolution cannot pass merely
+because the alternate version is unavailable. The synthetic version is a
+resolver fixture and adds no SDK or compiled extension support credit.
+
 ## Credits
 
 The purifier idea was inspired by nixcloud's
