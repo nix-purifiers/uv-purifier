@@ -131,6 +131,7 @@ jobs:
           python3 -B tests/composition-epochs.py \
             --target-nixpkgs "$(jq -r .path epoch-target.json)" \
             --python-attribute python38 --native-uv-epoch uv-0.3.0 \
+            --sandwiches --multiple-inputs \
             --state-root .native-uv-epoch
       - uses: actions/upload-artifact@v4
         if: always()
@@ -158,6 +159,7 @@ jobs:
           python3 -B tests/composition-epochs.py \
             --target-nixpkgs "$(jq -r .inputs.nixpkgs.path abi-sdk.json)" \
             --python-attribute python314FreeThreading --compiled-dependency-version 3.0.3 \
+            --sandwiches --multiple-inputs \
             --state-root .python-free-threaded
       - uses: actions/upload-artifact@v4
         if: always()
