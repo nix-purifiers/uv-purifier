@@ -172,6 +172,10 @@ def main():
         passed(active)
 
         def native_environment(directory, consumer=False, published=False, extra_packages=(), creator_version=None):
+            run(directory / 'bin/python', '-I', '-B', '-c',
+                'import markupsafe,markupsafe._speedups;'
+                'assert markupsafe._speedups.__file__.endswith(".so");'
+                'assert str(markupsafe.escape("<nix>")) == "&lt;nix&gt;"')
             assert (run(directory / 'bin/python', '-I', '-c',
                 'import sysconfig;print(bool(sysconfig.get_config_var("Py_GIL_DISABLED")))') == 'True') == target_free_threaded
             if target_free_threaded:
