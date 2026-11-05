@@ -80,6 +80,23 @@ def main():
             raise RuntimeError(result.stderr[-6000:])
         return result.stdout.strip()
 
+    ordinary_caches = {}
+
+    def ordinary_cache(label):
+        if label not in ordinary_caches:
+            cache = state / 'ordinary-caches' / label
+            assert not cache.exists(), cache
+            ordinary_caches[label] = cache
+            report.setdefault('ordinaryCacheProfiles', {})[label] = {
+                'initialState': 'absent', 'path': str(cache),
+            }
+        return ordinary_caches[label]
+
+    def ordinary_uv(label, executable, *arguments, cwd=sdk):
+        cache = ordinary_cache(label)
+        return run(executable, '--cache-dir', cache, *arguments, cwd=cwd,
+                   environment=dict(env, UV_CACHE_DIR=str(cache)))
+
     def passed(name):
         report['results'][name] = {'status': 'passed'}
         save()
@@ -263,8 +280,8 @@ def main():
         repository = Path(run('nix', 'build', 'path:' + str(consumer) + '#default.projections.python',
                               '--out-link', state / 'projection', '--print-out-paths'))
         ordinary = state / 'ordinary'
-        run(uv, 'venv', '--python', python, ordinary)
-        run(uv, 'pip', 'install', '--python', ordinary / 'bin/python', '--no-index',
+        ordinary_uv('baseline', uv, 'venv', '--python', python, ordinary)
+        ordinary_uv('baseline', uv, 'pip', 'install', '--offline', '--python', ordinary / 'bin/python', '--no-index',
             '--find-links', repository, 'epoch-consumer')
         assert run(ordinary / 'bin/epoch_consumer') == 'target=' + minor
         run(ordinary / 'bin/python', '-I', '-c', 'import epoch_provider,markupsafe._speedups')
@@ -285,13 +302,13 @@ def main():
                 json.dumps(['epoch-consumer==' + published_version]) +
                 '\n[build-system]\nrequires=["hatchling==1.18.0"]\nbuild-backend="hatchling.build"\n')
             (middle / 'pyproject.toml').write_text(middle_definition)
-            run(helper_uv, 'lock', '--offline', '--no-index', '--find-links', repository, '--python', python, cwd=middle)
+            ordinary_uv('republisher', helper_uv, 'lock', '--offline', '--no-index', '--find-links', repository, '--python', python, cwd=middle)
             middle_lock = (middle / 'uv.lock').read_bytes()
-            run(helper_uv, 'venv', '--python', python, middle / '.venv')
-            run(helper_uv, 'pip', 'install', '--offline', '--no-index', '--python', middle / '.venv/bin/python',
+            ordinary_uv('republisher', helper_uv, 'venv', '--python', python, middle / '.venv')
+            ordinary_uv('republisher', helper_uv, 'pip', 'install', '--offline', '--no-index', '--python', middle / '.venv/bin/python',
                 '--find-links', repository, 'epoch-consumer==' + published_version)
             native_environment(middle / '.venv', consumer=True, published=True, creator_version=ordinary_creator)
-            run(helper_uv, 'build', '--wheel', '--python', python, '--out-dir', middle / 'dist', cwd=middle)
+            ordinary_uv('republisher', helper_uv, 'build', '--wheel', '--python', python, '--out-dir', middle / 'dist', cwd=middle)
             middle_wheel, = (middle / 'dist').glob('*.whl')
             report['ordinaryPublication'] = {'wheel': middle_wheel.name,
                 'sha256': hashlib.sha256(middle_wheel.read_bytes()).hexdigest(),
@@ -319,7 +336,7 @@ def main():
             control.mkdir()
             (control / 'pyproject.toml').write_text(
                 '[project]\nname="alternative-control"\nversion="1.0"\ndependencies=["markupsafe==99.0"]\n')
-            run(helper_uv, 'lock', '--offline', '--no-index', '--find-links', alternatives,
+            ordinary_uv('eviction-control', helper_uv, 'lock', '--offline', '--no-index', '--find-links', alternatives,
                 '--python', python, cwd=control)
             assert 'version = "99.0"' in (control / 'uv.lock').read_text()
             report['ordinaryAlternative'] = {'version': '99.0',
@@ -329,9 +346,10 @@ def main():
                 'dependencies=' + json.dumps(['epoch-consumer==' + published_version,
                                              'markupsafe==99.0']))
             (middle / 'pyproject.toml').write_text(conflicting_definition)
-            conflict = subprocess.run([str(helper_uv), 'lock', '--offline', '--no-index', '--find-links',
+            conflict = subprocess.run([str(helper_uv), '--cache-dir', str(ordinary_cache('republisher')),
+                'lock', '--offline', '--no-index', '--find-links',
                 str(repository), '--find-links', str(alternatives), '--python', str(python)],
-                cwd=middle, env=env, text=True, capture_output=True)
+                cwd=middle, env=dict(env, UV_CACHE_DIR=str(ordinary_cache('republisher'))), text=True, capture_output=True)
             assert conflict.returncode and 'No solution found' in conflict.stderr, conflict.stderr
             assert args.compiled_dependency_version in conflict.stderr and '99.0' in conflict.stderr, conflict.stderr
             assert (middle / 'uv.lock').read_bytes() == middle_lock, 'failed eviction rewrote ordinary lock'
@@ -369,8 +387,8 @@ def main():
             final_repository = Path(run('nix', 'build', 'path:' + str(final) + '#default.projections.python',
                 '--out-link', state / 'sandwich-final-projection', '--print-out-paths'))
             ordinary_final = state / 'ordinary-final'
-            run(uv, 'venv', '--python', python, ordinary_final)
-            run(uv, 'pip', 'install', '--offline', '--no-index', '--python', ordinary_final / 'bin/python',
+            ordinary_uv('sandwich-final', uv, 'venv', '--python', python, ordinary_final)
+            ordinary_uv('sandwich-final', uv, 'pip', 'install', '--offline', '--no-index', '--python', ordinary_final / 'bin/python',
                 '--find-links', final_repository, 'epoch-final')
             final_ordinary_graph = native_environment(ordinary_final, consumer=True, published=True,
                 extra_packages=('ordinary-middle', 'epoch-final'))
@@ -459,8 +477,8 @@ def main():
             phase_projection = Path(run('nix', 'build', 'path:' + str(consumer) + '#default.projections.python',
                                         '--out-link', state / (label + '-projection'), '--print-out-paths'))
             phase_downstream = state / (label + '-ordinary')
-            run(uv, 'venv', '--python', python, phase_downstream)
-            run(uv, 'pip', 'install', '--offline', '--no-index', '--python', phase_downstream / 'bin/python',
+            ordinary_uv(label, uv, 'venv', '--python', python, phase_downstream)
+            ordinary_uv(label, uv, 'pip', 'install', '--offline', '--no-index', '--python', phase_downstream / 'bin/python',
                 '--find-links', phase_projection, 'epoch-consumer')
             native_environment(phase_downstream, consumer=True, published=True)
             assert run(phase_downstream / 'bin/epoch_consumer') == 'target=' + minor
