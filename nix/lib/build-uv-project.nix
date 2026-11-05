@@ -82,6 +82,9 @@ in
   # The command `tests` runs in the development environment, from a copy of
   # `src`.
   testCommand ? [ "pytest" ],
+  # Native commands needed by tests, independently of Python dependencies
+  # selected by the project's native uv lock and dependency groups.
+  nativeCheckInputs ? [ ],
 }:
 let
   inherit (builtins)
@@ -638,7 +641,7 @@ let
     dontInstall = true;
   };
 
-  tests = runCommand "${projectName}-tests" { } ''
+  tests = runCommand "${projectName}-tests" { nativeBuildInputs = nativeCheckInputs; } ''
     cp -r ${buildSrc} project
     chmod -R u+w project
     cd project
