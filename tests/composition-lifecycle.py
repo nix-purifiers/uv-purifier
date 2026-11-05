@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -85,6 +86,58 @@ build-backend = "hatchling.build"
         run(cli, 'lock', '--project', project, *args)
         assert definition.read_bytes() == original, 'locking modified user manifest'
 
+    def write_extra_buildable():
+        member = project / 'packages/extra-app'
+        (member / 'src/extra_app').mkdir(parents=True, exist_ok=True)
+        (member / 'src/extra_app/__init__.py').write_text('''from importlib.metadata import version
+import attrs
+@attrs.define
+class Extra:
+    value: str = "extra"
+VALUE = attrs.asdict(Extra())["value"]
+ATTRS_VERSION = version("attrs")
+''')
+        (member / 'pyproject.toml').write_text('''[project]
+name = "extra-app"
+version = "1.0"
+dependencies = ["attrs==25.3.0"]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+''')
+
+    def native_buildable_baseline(label, attrs_path):
+        # Ordinary uv receives the same immutable wheel through its native
+        # source configuration. No purifier lock or flake is used here.
+        baseline = temporary / 'native-buildable-baseline'
+        baseline.mkdir(exist_ok=True)
+        shutil.copytree(project / 'src', baseline / 'src', dirs_exist_ok=True)
+        if extra_buildable:
+            shutil.copytree(project / 'packages', baseline / 'packages', dirs_exist_ok=True)
+        (baseline / 'pyproject.toml').write_text(definition.read_text() +
+            '\n[tool.uv.sources]\nattrs = { path = ' + json.dumps(attrs_path) + ' }\n')
+        environment = dict(os.environ, UV_CACHE_DIR=str(temporary / 'native-buildable-cache'))
+        run(tools / 'bin/uv', 'lock', '--project', baseline, '--python', tools / 'bin/python', env=environment)
+        native = tomllib.loads((baseline / 'uv.lock').read_text())
+        assert ('extra-app' in {p['name'] for p in native['package']}) == extra_buildable
+        attrs = next(p for p in native['package'] if p['name'] == 'attrs')
+        assert attrs['source']['path'] == attrs_path, attrs
+        run(tools / 'bin/uv', 'sync', '--project', baseline, '--all-packages', '--frozen',
+            '--python', tools / 'bin/python', env=environment)
+        installed = run(baseline / '.venv/bin/python', '-c',
+            'import importlib.util; print(importlib.util.find_spec("extra_app") is not None)')
+        assert (installed == 'True') == extra_buildable, installed
+        if extra_buildable:
+            assert run(baseline / '.venv/bin/python', '-c',
+                'import extra_app; print(extra_app.ATTRS_VERSION)') == version
+            run(tools / 'bin/uv', 'build', '--project', baseline, '--package', 'extra-app',
+                '--wheel', '--out-dir', temporary / 'native-extra-dist', env=environment)
+        else:
+            result = subprocess.run([str(tools / 'bin/uv'), 'build', '--project', str(baseline),
+                '--package', 'extra-app', '--wheel'], env=environment, capture_output=True, text=True)
+            assert result.returncode != 0 and 'extra-app' in result.stderr, result
+        print('PASS uv.lifecycle.native-baseline-' + label, flush=True)
+
     def names():
         return {package['name'] for package in tomllib.loads((project / 'uv.lock').read_text())['package']}
 
@@ -131,6 +184,9 @@ build-backend = "hatchling.build"
         assert ('path' in attrs['source']) == nix_origin, attrs
         if nix_origin:
             assert attrs['source']['path'].startswith('/nix/store/'), attrs
+            locked = json.loads((project / 'uv-purifier.lock.json').read_text())
+            assert not any(entry['path'].startswith(('attrs-', 'docopt-', 'markupsafe-', 'simple-'))
+                           for entry in locked['artifacts']), 'provided wheels leaked into download lock'
         # The editable developer environment must change along with the locks.
         before_prefetch = [(project / name).read_bytes() for name in ('uv.lock', 'uv-purifier.lock.json')]
         run(cli, 'prefetch', '--project', project,
@@ -156,6 +212,7 @@ build-backend = "hatchling.build"
         assert (extra == 'True') == extra_buildable, extra
         if extra_buildable:
             assert run(downstream / 'bin/python', '-c', 'import extra_app; print(extra_app.VALUE)') == 'extra'
+            assert run(downstream / 'bin/python', '-c', 'import extra_app; print(extra_app.ATTRS_VERSION)') == version
         selected = run(downstream / 'bin/python', '-c',
                        'from importlib.metadata import version; print(version("attrs"))')
         # Unmodified third-party wheels retain their original native version;
@@ -192,6 +249,23 @@ build-backend = "hatchling.build"
         prove(label, nix_origin=True)
     # Sync owns the development environment, not an existing ordinary consumer.
     six_state(temporary / 'downstream-add-registry-with-nix', True)
+    attrs_path = next(p for p in tomllib.loads((project / 'uv.lock').read_text())['package']
+                      if p['name'] == 'attrs')['source']['path']
+    write_extra_buildable()
+    for label, extra_buildable in [('add-buildable-with-nix', True), ('drop-buildable-with-nix', False)]:
+        manifest()
+        native_buildable_baseline(label, attrs_path)
+        lock()
+        current = json.loads((project / 'uv-purifier.lock.json').read_text())
+        assert current['projectInputs'] == provided, 'buildable churn changed producer identity'
+        current_attrs = next(p for p in tomllib.loads((project / 'uv.lock').read_text())['package']
+                             if p['name'] == 'attrs')
+        assert current_attrs['source']['path'] == attrs_path, current_attrs
+        assert ('extra-app' in names()) == extra_buildable
+        prove(label, nix_origin=True)
+    # Removing the managed buildable must leave the earlier ordinary release usable.
+    assert run(temporary / 'downstream-add-buildable-with-nix/bin/python', '-c',
+               'import extra_app; print(extra_app.ATTRS_VERSION)') == version
     lock('--no-inputs')
     result = json.loads((project / 'uv-purifier.lock.json').read_text())
     assert not result.get('projectInputs'), 'removed Nix origin retained in purifier lock'
@@ -210,16 +284,7 @@ build-backend = "hatchling.build"
     lock()
     assert 'docopt' not in names()
     prove('drop-dependency')
-    member = project / 'packages/extra-app'
-    (member / 'src/extra_app').mkdir(parents=True)
-    (member / 'src/extra_app/__init__.py').write_text('VALUE = "extra"\n')
-    (member / 'pyproject.toml').write_text('''[project]
-name = "extra-app"
-version = "1.0"
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-''')
+    write_extra_buildable()
     extra_buildable = True
     manifest()
     lock()

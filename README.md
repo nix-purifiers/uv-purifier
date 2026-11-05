@@ -466,6 +466,14 @@ inputs. It checks runtime and installed metadata cleanup, unchanged locks and
 provided source identity, and preservation of an existing ordinary downstream.
 Use `--state-root <directory>` to contain its scratch files and caches.
 
+Buildable addition/removal also runs while the Nix input stays active. The new
+member depends on and executes the supplied `attrs` package. An ordinary uv
+baseline uses the same immutable wheel through native source configuration;
+both paths check member installation/removal. The purifier path also checks
+pure outputs, ordinary downstreams, unchanged producer identity, exclusion of
+provided wheels from downloads, and continued use of the earlier publication.
+This extends the current SDK fixture, without adding historical SDK claims.
+
 `tests/composition-epochs.py` separates the helper, native uv and target Python.
 It locks a project with a compiled dependency, builds a producer, consumes it as
 an explicit Nix input, prepares the interactive environment, builds a consumer
