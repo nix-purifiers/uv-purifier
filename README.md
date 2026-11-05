@@ -530,6 +530,12 @@ must fail without changing manifests, locks or the existing environment.
 Explicit `--input` arguments supply the complete requested set; omitting them
 retains the recorded set. These scenarios can run together with `--sandwiches`.
 
+Ordinary consumers and the republisher each start with a separate absent UV
+cache, selected explicitly on the command line. Runtime installs resolve
+offline from the publication alone; they cannot reuse the purifier's warmed
+cache. The republisher may fetch its own build backend, independently of the
+runtime publication. Receipts retain these cache profiles separately.
+
 ## Credits
 
 The purifier idea was inspired by nixcloud's
