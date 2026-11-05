@@ -98,18 +98,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
-      - uses: actions/checkout@v5
-        with:
-          repository: nix-purifiers/purifier
-          ref: 09a2da5af5b163ae3237eb39bbafd5da5899e296
-          path: .epoch-shared
-      - name: Exercise the exact historical target with the shared probe candidate
+      - name: Exercise the exact historical target with the default shared input
         run: |
           nix flake archive --json 'github:NixOS/nixpkgs/${{ matrix.nixpkgs }}' > epoch-target.json
           python3 -B tests/composition-epochs.py \
             --target-nixpkgs "$(jq -r .path epoch-target.json)" \
             --python-attribute '${{ matrix.python }}' \
-            --shared-library .epoch-shared --state-root .python-epochs
+            --state-root .python-epochs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -130,18 +125,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
-      - uses: actions/checkout@v5
-        with:
-          repository: nix-purifiers/purifier
-          ref: 09a2da5af5b163ae3237eb39bbafd5da5899e296
-          path: .epoch-shared
       - name: Preserve the uv 0.3 resolver with independent helper and target Python
         run: |
           nix flake archive --json github:NixOS/nixpkgs/205fd4226592cc83fd4c0885a3e4c9c400efabb5 > epoch-target.json
           python3 -B tests/composition-epochs.py \
             --target-nixpkgs "$(jq -r .path epoch-target.json)" \
             --python-attribute python38 --native-uv-epoch uv-0.3.0 \
-            --shared-library .epoch-shared --state-root .native-uv-epoch
+            --state-root .native-uv-epoch
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -162,18 +152,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
-      - uses: actions/checkout@v5
-        with:
-          repository: nix-purifiers/purifier
-          ref: 369e2ae61d6117d7d890b5bd69c134ea3641565f
-          path: .abi-shared
       - name: Exercise the actual free-threaded target and compiled dependency
         run: |
           nix flake archive --json > abi-sdk.json
           python3 -B tests/composition-epochs.py \
             --target-nixpkgs "$(jq -r .inputs.nixpkgs.path abi-sdk.json)" \
             --python-attribute python314FreeThreading --compiled-dependency-version 3.0.3 \
-            --shared-library .abi-shared --state-root .python-free-threaded
+            --state-root .python-free-threaded
       - uses: actions/upload-artifact@v4
         if: always()
         with:

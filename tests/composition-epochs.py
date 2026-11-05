@@ -85,7 +85,13 @@ def main():
             shared_snapshot = shared['path']
             archived_shared = json.loads(run('nix', 'flake', 'archive', '--json', '--no-write-lock-file', str(args.shared_library.resolve())))
             assert archived_shared['path'] == shared_snapshot, 'shared source changed during fixture setup'
-            report['sharedLibrary'] = {'path': shared_snapshot, 'narHash': shared['locked']['narHash']}
+            report['sharedLibrary'] = {'path': shared_snapshot, 'narHash': shared['locked']['narHash'],
+                                       'selection': 'explicit-candidate'}
+        else:
+            default_shared = run('nix', 'eval', '--impure', '--raw', '--expr',
+                'let f=builtins.getFlake ' + json.dumps('path:' + snapshot) + '; in f.inputs.purifier.outPath')
+            report['sharedLibrary'] = {'path': default_shared, 'narHash': run('nix', 'hash', 'path', default_shared),
+                                       'selection': 'default-input'}
         system = run('nix', 'eval', '--impure', '--raw', '--expr', 'builtins.currentSystem')
         report.update(system=system, source={'path': snapshot, 'narHash': metadata['locked']['narHash'],
                                              'revision': run('git', 'rev-parse', 'HEAD'),

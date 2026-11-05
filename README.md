@@ -498,6 +498,11 @@ support with the default shared input. Python 3.8.19 and 3.9.20 are individual
 historical target observations; they do not establish all earlier releases,
 other Python implementations, extension build toolchains or uv manager epochs.
 
+The target and manager jobs use the default shared input pinned by this SDK,
+without candidate overrides. Receipts identify whether an explicit candidate
+or the default input was selected. This exercises the shipped dependency path
+after the shared-library fixes land.
+
 `--native-uv-epoch uv-0.3.0` additionally selects the pinned package fixture in
 `tests/sdk/`. uv 0.3.0 has project lock/install APIs but no build, export or
 publish commands; a separate helper supplies those frontends without replacing
