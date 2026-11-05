@@ -148,14 +148,14 @@ def main():
             (Path(snapshot) / 'tests/target_platform.py').read_bytes()).hexdigest()
         passed(active)
 
-        def native_environment(directory, consumer=False, published=False, extra_packages=()):
+        def native_environment(directory, consumer=False, published=False, extra_packages=(), creator_version=None):
             assert (run(directory / 'bin/python', '-I', '-c',
                 'import sysconfig;print(bool(sysconfig.get_config_var("Py_GIL_DISABLED")))') == 'True') == target_free_threaded
             if target_free_threaded:
                 assert run(directory / 'bin/python', '-I', '-c',
                     'import sys,markupsafe._speedups;print(sys._is_gil_enabled())') == 'False'
             configuration = dict(line.split(' = ', 1) for line in (directory / 'pyvenv.cfg').read_text().splitlines() if ' = ' in line)
-            assert configuration['uv'] == report['nativeManager'].split()[1], configuration
+            assert configuration['uv'] == (creator_version or report['nativeManager'].split()[1]), configuration
             site = Path(run(directory / 'bin/python', '-E', '-s', '-c', 'import sysconfig;print(sysconfig.get_path("purelib"))'))
             records = [Parser().parsestr(path.read_text()) for path in site.glob('*.dist-info/METADATA')]
             graph = {record['Name'].lower().replace('_', '-'): record['Version'] for record in records}
@@ -266,6 +266,9 @@ def main():
         passed(active)
         if args.sandwiches:
             active = 'ordinary-republisher'
+            report['ordinaryRepublisherManager'] = {'version': report['helperManager'],
+                'package': report['helperManagerPackage'], 'role': 'ordinary project lock/build/install'}
+            ordinary_creator = report['helperManager'].split()[1]
             middle = state / 'ordinary_middle'
             (middle / 'src/ordinary_middle').mkdir(parents=True)
             (middle / 'src/ordinary_middle/__init__.py').write_text('import epoch_consumer\n')
@@ -281,7 +284,7 @@ def main():
             run(helper_uv, 'venv', '--python', python, middle / '.venv')
             run(helper_uv, 'pip', 'install', '--offline', '--no-index', '--python', middle / '.venv/bin/python',
                 '--find-links', repository, 'epoch-consumer==' + published_version)
-            native_environment(middle / '.venv', consumer=True, published=True)
+            native_environment(middle / '.venv', consumer=True, published=True, creator_version=ordinary_creator)
             run(helper_uv, 'build', '--wheel', '--python', python, '--out-dir', middle / 'dist', cwd=middle)
             middle_wheel, = (middle / 'dist').glob('*.whl')
             report['ordinaryPublication'] = {'wheel': middle_wheel.name,
@@ -326,7 +329,7 @@ def main():
             assert conflict.returncode and 'No solution found' in conflict.stderr, conflict.stderr
             assert args.compiled_dependency_version in conflict.stderr and '99.0' in conflict.stderr, conflict.stderr
             assert (middle / 'uv.lock').read_bytes() == middle_lock, 'failed eviction rewrote ordinary lock'
-            native_environment(middle / '.venv', consumer=True, published=True)
+            native_environment(middle / '.venv', consumer=True, published=True, creator_version=ordinary_creator)
             (middle / 'pyproject.toml').write_text(middle_definition)
             report['ordinaryEvictionDiagnostic'] = conflict.stderr
             passed(active)
