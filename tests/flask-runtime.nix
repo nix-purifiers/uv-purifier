@@ -31,6 +31,20 @@ pkgs.runCommand "uv-flask-native-and-ordinary-runtime"
     sha256sum --check "$TMPDIR/before.sha256"
     ${pkgs.lib.optionalString requireCSource ''
       .venv/bin/python -I ${./native-extension.py}
+      cp -r ${src} "$TMPDIR/wrong-project"
+      chmod -R u+w "$TMPDIR/wrong-project"
+      uv venv --python ${pkgs.python314.interpreter} "$TMPDIR/wrong-project/.venv"
+      echo preserved > "$TMPDIR/wrong-project/.venv/sentinel"
+      (cd "$TMPDIR/wrong-project"; sha256sum .venv/pyvenv.cfg .venv/sentinel \
+        pyproject.toml uv.lock uv-purifier.lock.json) > "$TMPDIR/wrong-before.sha256"
+      if uv-purifier prefetch --project "$TMPDIR/wrong-project" \
+        --inputs ${project.interactive} > "$TMPDIR/wrong.log" 2>&1; then
+        echo 'prefetch accepted an existing environment for a different interpreter' >&2
+        exit 1
+      fi
+      cat "$TMPDIR/wrong.log"
+      grep 'different Python or ABI' "$TMPDIR/wrong.log"
+      (cd "$TMPDIR/wrong-project"; sha256sum --check "$TMPDIR/wrong-before.sha256")
       # A fresh cache prevents the earlier compiled wheel masking this control.
       uv venv --python ${python.interpreter} "$TMPDIR/no-compiler"
       if CC=/missing-native-compiler UV_CACHE_DIR="$TMPDIR/no-compiler-cache" \
