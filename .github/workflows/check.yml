@@ -178,60 +178,28 @@ jobs:
         include:
           - runner: ubuntu-latest
             system: x86_64-linux
-            python: python311
-            uv: uv-0.13.7
-          - runner: ubuntu-latest
-            system: x86_64-linux
-            python: python312
-            uv: uv-0.13.7
-          - runner: ubuntu-latest
-            system: x86_64-linux
-            python: python313
-            uv: uv-0.13.7
-          - runner: ubuntu-latest
-            system: x86_64-linux
-            python: python314
-            uv: uv-0.13.7
-          - runner: ubuntu-latest
-            system: x86_64-linux
-            python: python315
-            uv: uv-0.13.7
-          - runner: ubuntu-latest
-            system: x86_64-linux
             python: python3
             uv: shipped
-          - runner: macos-15
-            system: aarch64-darwin
-            python: python311
-            uv: uv-0.13.7
-          - runner: macos-15
-            system: aarch64-darwin
-            python: python312
-            uv: uv-0.13.7
-          - runner: macos-15
-            system: aarch64-darwin
-            python: python313
-            uv: uv-0.13.7
-          - runner: macos-15
-            system: aarch64-darwin
-            python: python314
-            uv: uv-0.13.7
-          - runner: macos-15
-            system: aarch64-darwin
-            python: python315
-            uv: uv-0.13.7
-          - runner: macos-15
-            system: aarch64-darwin
-            python: python3
-            uv: shipped
-          - runner: ubuntu-24.04-arm
-            system: aarch64-linux
+          - runner: ubuntu-latest
+            system: x86_64-linux
             python: python315
             uv: uv-0.13.7
           - runner: ubuntu-24.04-arm
             system: aarch64-linux
             python: python3
             uv: shipped
+          - runner: ubuntu-24.04-arm
+            system: aarch64-linux
+            python: python315
+            uv: uv-0.13.7
+          - runner: macos-15
+            system: aarch64-darwin
+            python: python3
+            uv: shipped
+          - runner: macos-15
+            system: aarch64-darwin
+            python: python315
+            uv: uv-0.13.7
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
