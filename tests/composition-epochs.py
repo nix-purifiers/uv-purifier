@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from source_snapshot import archive_source
 
 
 def main():
@@ -104,16 +105,10 @@ def main():
 
     save()
     try:
-        metadata = json.loads(run('nix', 'flake', 'metadata', '--json', '--no-write-lock-file', str(sdk)))
-        snapshot = metadata['path']
-        archived = json.loads(run('nix', 'flake', 'archive', '--json', '--no-write-lock-file', str(sdk)))
-        assert archived['path'] == snapshot, 'SDK source changed during fixture setup'
+        metadata, snapshot = archive_source(run, sdk)
         shared_snapshot = None
         if args.shared_library:
-            shared = json.loads(run('nix', 'flake', 'metadata', '--json', '--no-write-lock-file', str(args.shared_library.resolve())))
-            shared_snapshot = shared['path']
-            archived_shared = json.loads(run('nix', 'flake', 'archive', '--json', '--no-write-lock-file', str(args.shared_library.resolve())))
-            assert archived_shared['path'] == shared_snapshot, 'shared source changed during fixture setup'
+            shared, shared_snapshot = archive_source(run, args.shared_library)
             report['sharedLibrary'] = {'path': shared_snapshot, 'narHash': shared['locked']['narHash'],
                                        'selection': 'explicit-candidate'}
         else:
