@@ -28,6 +28,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            sandbox = true
+      - name: Require sandboxed Nix builds
+        run: |
+          sandbox=$(nix config show sandbox)
+          printf 'Nix sandbox=%s\n' "$sandbox"
+          test "$sandbox" = true
       - run: nix flake check -L
 
   conformance-relock:
@@ -39,6 +47,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            sandbox = true
+      - name: Require sandboxed Nix builds
+        run: |
+          sandbox=$(nix config show sandbox)
+          printf 'Nix sandbox=%s\n' "$sandbox"
+          test "$sandbox" = true
       - run: tests/relock-fixtures.sh
       - run: git diff --exit-code
 
@@ -51,6 +67,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            sandbox = true
+      - name: Require sandboxed Nix builds
+        run: |
+          sandbox=$(nix config show sandbox)
+          printf 'Nix sandbox=%s\n' "$sandbox"
+          test "$sandbox" = true
       - run: |
           system=$(nix eval --raw --impure --expr builtins.currentSystem)
           checks=(".#checks.$system.rebuild-release" ".#checks.$system.rebuild-package")
@@ -66,6 +90,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            sandbox = true
+      - name: Require sandboxed Nix builds
+        run: |
+          sandbox=$(nix config show sandbox)
+          printf 'Nix sandbox=%s\n' "$sandbox"
+          test "$sandbox" = true
       - run: tests/conformance-update.sh
 
   composition-native:
@@ -78,6 +110,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            sandbox = true
+      - name: Require sandboxed Nix builds
+        run: |
+          sandbox=$(nix config show sandbox)
+          printf 'Nix sandbox=%s\n' "$sandbox"
+          test "$sandbox" = true
       - run: python3 tests/composition-native.py
       - run: python3 tests/composition-python.py
       - run: python3 tests/composition-lifecycle.py
@@ -98,6 +138,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            sandbox = true
+      - name: Require sandboxed Nix builds
+        run: |
+          sandbox=$(nix config show sandbox)
+          printf 'Nix sandbox=%s\n' "$sandbox"
+          test "$sandbox" = true
       - name: Exercise the exact historical target with the default shared input
         run: |
           nix flake archive --json 'github:NixOS/nixpkgs/${{ matrix.nixpkgs }}' > epoch-target.json
@@ -125,6 +173,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            sandbox = true
+      - name: Require sandboxed Nix builds
+        run: |
+          sandbox=$(nix config show sandbox)
+          printf 'Nix sandbox=%s\n' "$sandbox"
+          test "$sandbox" = true
       - name: Preserve the uv 0.3 resolver with independent helper and target Python
         run: |
           nix flake archive --json github:NixOS/nixpkgs/205fd4226592cc83fd4c0885a3e4c9c400efabb5 > epoch-target.json
@@ -153,6 +209,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            sandbox = true
+      - name: Require sandboxed Nix builds
+        run: |
+          sandbox=$(nix config show sandbox)
+          printf 'Nix sandbox=%s\n' "$sandbox"
+          test "$sandbox" = true
       - name: Exercise the actual free-threaded target and compiled dependency
         run: |
           nix flake archive --json > abi-sdk.json
@@ -205,6 +269,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            sandbox = true
+      - name: Require sandboxed Nix builds
+        run: |
+          sandbox=$(nix config show sandbox)
+          printf 'Nix sandbox=%s\n' "$sandbox"
+          test "$sandbox" = true
       - name: Assert native platform and execute pinned upstream sample
         run: |
           test "$(nix eval --impure --raw --expr builtins.currentSystem)" = '${{ matrix.system }}'

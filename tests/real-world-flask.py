@@ -31,14 +31,14 @@ def main():
                XDG_STATE_HOME=str(state / 'state'), UV_CACHE_DIR=str(state / 'cache/uv'),
                UV_PYTHON_DOWNLOADS='never', PYTHONDONTWRITEBYTECODE='1')
     env.pop('UV_PROJECT_ENVIRONMENT', None)
-    env['NIX_CONFIG'] = env.get('NIX_CONFIG', '') + '\nmax-jobs = 2\ncores = 2\neval-cache = false\n'
+    env['NIX_CONFIG'] = env.get('NIX_CONFIG', '') + '\nmax-jobs = 2\ncores = 2\neval-cache = false\nsandbox = true\n'
     stages = ('capture-lock', 'relock', 'prefetch', 'offline-upstream-tests',
               'pure-upstream-tests', 'runtime-derivation', 'ordinary-consumer', 'ordinary-missing-dependency-control')
     report = {'schema': 1, 'scope': 'exact pinned Flask and shipped Python/uv; no version intervals',
               'driverSha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               'sample': {'url': 'https://github.com/pallets/flask', 'revision': SAMPLE_REV},
               'results': {name: 'not-run' for name in stages},
-              'executionOptions': {'max-jobs': 2, 'cores': 2, 'eval-cache': False}}
+              'executionOptions': {'max-jobs': 2, 'cores': 2, 'eval-cache': False, 'sandbox': True}}
 
     def save():
         report['allPassed'] = all(value == 'passed' for value in report['results'].values())
@@ -48,7 +48,7 @@ def main():
         command = [str(item) for item in command]
         if command[0] == 'nix':
             command[1:1] = ['--option', 'max-jobs', '2', '--option', 'cores', '2',
-                            '--option', 'eval-cache', 'false']
+                            '--option', 'eval-cache', 'false', '--option', 'sandbox', 'true']
         result = subprocess.run(command, cwd=cwd, env=environment, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         with (state / 'commands.log').open('a') as log:
@@ -72,6 +72,10 @@ def main():
     active = 'capture-lock'
     save()
     try:
+        report['sandbox'] = {'effective': run('nix', 'config', 'show', 'sandbox'),
+                             'hostCaptureOutsideSandbox': True}
+        assert report['sandbox']['effective'] == 'true', 'pure/runtime checks require sandbox=true'
+        save()
         metadata, snapshot = archive_source(run, sdk)
         report['source'] = {'path': snapshot, 'narHash': metadata['locked']['narHash'],
                             'revision': run('git', 'rev-parse', 'HEAD'),
