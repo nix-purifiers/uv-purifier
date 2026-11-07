@@ -29,7 +29,9 @@ def main():
     env = dict(os.environ, TMPDIR=str(state / 'tmp'), XDG_CACHE_HOME=str(state / 'cache'),
                XDG_CONFIG_HOME=str(state / 'config'), XDG_DATA_HOME=str(state / 'data'),
                XDG_STATE_HOME=str(state / 'state'), UV_CACHE_DIR=str(state / 'cache/uv'),
-               UV_PYTHON_DOWNLOADS='never', PYTHONDONTWRITEBYTECODE='1')
+               UV_PYTHON_DOWNLOADS='never', PYTHONDONTWRITEBYTECODE='1',
+               # Copied Nix sources have mtime=1, outside ZIP's valid range.
+               SOURCE_DATE_EPOCH='315532800')
     env.pop('UV_PROJECT_ENVIRONMENT', None)
     env['NIX_CONFIG'] = env.get('NIX_CONFIG', '') + '\nmax-jobs = 2\ncores = 2\neval-cache = false\nsandbox = true\n'
     stages = ('capture-lock', 'relock', 'prefetch', 'offline-upstream-tests',
@@ -38,7 +40,8 @@ def main():
               'driverSha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               'sample': {'url': 'https://github.com/pallets/flask', 'revision': SAMPLE_REV},
               'results': {name: 'not-run' for name in stages},
-              'executionOptions': {'max-jobs': 2, 'cores': 2, 'eval-cache': False, 'sandbox': True}}
+              'executionOptions': {'max-jobs': 2, 'cores': 2, 'eval-cache': False, 'sandbox': True,
+                                   'sourceDateEpoch': env['SOURCE_DATE_EPOCH']}}
 
     def save():
         report['allPassed'] = all(value == 'passed' for value in report['results'].values())
