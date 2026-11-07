@@ -170,3 +170,94 @@ jobs:
             .python-free-threaded/report.json
             .python-free-threaded/commands.log
             abi-sdk.json
+
+  flask-runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            system: x86_64-linux
+            python: python311
+            uv: uv-0.13.7
+          - runner: ubuntu-latest
+            system: x86_64-linux
+            python: python312
+            uv: uv-0.13.7
+          - runner: ubuntu-latest
+            system: x86_64-linux
+            python: python313
+            uv: uv-0.13.7
+          - runner: ubuntu-latest
+            system: x86_64-linux
+            python: python314
+            uv: uv-0.13.7
+          - runner: ubuntu-latest
+            system: x86_64-linux
+            python: python315
+            uv: uv-0.13.7
+          - runner: ubuntu-latest
+            system: x86_64-linux
+            python: python3
+            uv: shipped
+          - runner: macos-15
+            system: aarch64-darwin
+            python: python311
+            uv: uv-0.13.7
+          - runner: macos-15
+            system: aarch64-darwin
+            python: python312
+            uv: uv-0.13.7
+          - runner: macos-15
+            system: aarch64-darwin
+            python: python313
+            uv: uv-0.13.7
+          - runner: macos-15
+            system: aarch64-darwin
+            python: python314
+            uv: uv-0.13.7
+          - runner: macos-15
+            system: aarch64-darwin
+            python: python315
+            uv: uv-0.13.7
+          - runner: macos-15
+            system: aarch64-darwin
+            python: python3
+            uv: shipped
+          - runner: ubuntu-24.04-arm
+            system: aarch64-linux
+            python: python315
+            uv: uv-0.13.7
+          - runner: ubuntu-24.04-arm
+            system: aarch64-linux
+            python: python3
+            uv: shipped
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - name: Assert native platform and execute pinned upstream sample
+        run: |
+          test "$(nix eval --impure --raw --expr builtins.currentSystem)" = '${{ matrix.system }}'
+          extra=()
+          if [ '${{ matrix.uv }}' != shipped ]; then
+            extra+=(--native-uv-epoch '${{ matrix.uv }}')
+          fi
+          python3 -B tests/real-world-flask.py --state-root .flask-runtime \
+            --python-attribute '${{ matrix.python }}' "${extra[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: flask-runtime-${{ matrix.system }}-${{ matrix.python }}-${{ matrix.uv }}
+          include-hidden-files: true
+          retention-days: 14
+          path: |
+            .flask-runtime/report.json
+            .flask-runtime/commands.log
+            .flask-runtime/flask/uv.lock
+            .flask-runtime/flask/uv-purifier.lock.json
+            .flask-runtime/packaging/flake.lock
+            .flask-runtime/packaging/flake.nix
+            .flask-runtime/packaging/capture-receipt.json
+            .flask-runtime/packaging/pure-source

@@ -1060,6 +1060,22 @@ def prefetch(root, lockfile, inputs=None):
         UV_PYTHON_DOWNLOADS="never",
         UV_CACHE_DIR=cache,
     )
+    # A locked sdist may contain a native extension. Use the same immutable
+    # compiler as the pure builder, rather than depending on a host gcc.
+    compiler_environment = os.path.join(inputs, "compiler-env.json")
+    if os.path.isfile(compiler_environment):
+        # Captured setup replaces ambient toolchain overrides. In particular,
+        # an SDK absent on this platform must not leak in from the caller.
+        for name in ("CC", "CXX", "AR", "AS", "LD", "NM", "RANLIB", "STRIP",
+                     "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "NIX_CFLAGS_COMPILE",
+                     "NIX_CFLAGS_COMPILE_FOR_BUILD", "NIX_LDFLAGS", "NIX_CFLAGS_LINK",
+                     "NIX_APPLE_SDK_VERSION", "NIX_CC", "NIX_BINTOOLS"):
+            environment.pop(name, None)
+        with open(compiler_environment) as compiler_settings:
+            environment.update(json.load(compiler_settings))
+    compiler_bin = os.path.join(inputs, "bin")
+    if os.path.isdir(compiler_bin):
+        environment["PATH"] = compiler_bin + os.pathsep + environment.get("PATH", "")
     venv = os.environ.get("UV_PROJECT_ENVIRONMENT", os.path.join(root, ".venv"))
     python = os.path.join(venv, "bin", "python")
 
