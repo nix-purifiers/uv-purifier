@@ -36,7 +36,7 @@
 #   from.
 {
   lib,
-  stdenvNoCC,
+  stdenv,
   linkFarm,
   runCommand,
   writeText,
@@ -111,7 +111,7 @@ let
     if projectDependencies == null then
       purifier.lockedProjectInputs {
         inputs = inputRecords;
-        system = stdenvNoCC.hostPlatform.system;
+        system = stdenv.hostPlatform.system;
       }
     else
       projectDependencies;
@@ -147,7 +147,7 @@ let
     map (entry: {
       name = entry.path;
       value = entry;
-    }) (purifier.entriesFor stdenvNoCC.hostPlatform.system locked)
+    }) (purifier.entriesFor stdenv.hostPlatform.system locked)
   );
 
   # The source the builds run in: `src` itself, or a copy of it with the
@@ -192,7 +192,7 @@ let
   // fetchers;
   fetch = purifier.fetchEntry fetchArgs;
 
-  platform = stdenvNoCC.hostPlatform;
+  platform = stdenv.hostPlatform;
   target = "Python ${python.pythonVersion} on ${platform.system}";
   wheelTarget = {
     inherit (python) pythonVersion;
@@ -293,7 +293,7 @@ let
   wheelhouseEntries = map (
     name:
     systemFiles.${name}
-      or (throw "uv-purifier: the lock has no download of ${name} for ${stdenvNoCC.hostPlatform.system}. Run `uv-purifier lock`.")
+      or (throw "uv-purifier: the lock has no download of ${name} for ${stdenv.hostPlatform.system}. Run `uv-purifier lock`.")
   ) fileNames;
 
   wheelhouse = purifier.tree (
@@ -379,7 +379,7 @@ let
             }
           ]
         else
-          stdenvNoCC.mkDerivation {
+          stdenv.mkDerivation {
             pname = "${d.name}-wheel";
             inherit (d) version;
             src = directSource d;
@@ -411,7 +411,7 @@ let
   indexWheels = listToAttrs (
     map (distribution: {
       name = distribution.key;
-      value = stdenvNoCC.mkDerivation {
+      value = stdenv.mkDerivation {
         pname = "${distribution.name}-runtime-wheel";
         version = lib.removePrefix "${distribution.name}==" distribution.key;
         src = fetch systemFiles.${distribution.sdist};
@@ -484,7 +484,7 @@ let
   distributions = listToAttrs (
     map (m: {
       inherit (m) name;
-      value = stdenvNoCC.mkDerivation {
+      value = stdenv.mkDerivation {
         pname = "${m.name}-distributions";
         version = memberVersion m;
         src = buildSrc;
@@ -581,7 +581,7 @@ let
   packages = listToAttrs (
     map (m: {
       inherit (m) name;
-      value = stdenvNoCC.mkDerivation (finalAttrs: {
+      value = stdenv.mkDerivation (finalAttrs: {
         pname = m.name;
         version = memberVersion m;
         src = buildSrc;
@@ -626,7 +626,7 @@ let
 
   # Every member with the default dependency groups, as `uv sync` installs
   # a project for development.
-  development = stdenvNoCC.mkDerivation {
+  development = stdenv.mkDerivation {
     pname = "${projectName}-development";
     version = "0";
     src = buildSrc;
@@ -682,14 +682,36 @@ let
   # What `uv-purifier prefetch` installs the project's .venv from: the
   # Python of the build, the wheelhouse, and the wheels of the direct
   # packages with the index that split_requirements.py reads.
-  interactive = runCommand "uv-purifier-interactive" { } ''
-    mkdir $out
-    ln -s ${python.interpreter} $out/python
-    ln -s ${wheelhouse} $out/wheelhouse
-    ln -s ${directIndex} $out/direct.json
-    ln -s ${./split_requirements.py} $out/split_requirements.py
-    ${lib.optionalString hasInputs "ln -s ${buildSrc} $out/project"}
-  '';
+  interactive =
+    runCommand "uv-purifier-interactive"
+      {
+        nativeBuildInputs = [
+          stdenv.cc
+        ];
+      }
+      ''
+        mkdir $out
+        ln -s ${stdenv.cc}/bin $out/bin
+        ${python3.interpreter} -I - "$out/compiler-env.json" <<'PYTHON'
+        import json, os, sys
+        # Retain compiler/SDK setup, never sandbox paths or the whole build env.
+        names = ("CC", "CXX", "AR", "AS", "LD", "NM", "RANLIB", "STRIP",
+                 "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "NIX_CFLAGS_COMPILE",
+                 "NIX_CFLAGS_COMPILE_FOR_BUILD", "NIX_LDFLAGS", "NIX_CFLAGS_LINK",
+                 "NIX_APPLE_SDK_VERSION", "NIX_CC", "NIX_BINTOOLS")
+        with open(sys.argv[1], "w") as output:
+            settings = {name: os.environ[name] for name in names if name in os.environ}
+            for temporary in (os.environ.get("TMPDIR"), os.environ.get("NIX_BUILD_TOP")):
+                if temporary and any(temporary in value for value in settings.values()):
+                    raise RuntimeError("compiler settings retain a sandbox temporary path")
+            json.dump(settings, output)
+        PYTHON
+        ln -s ${python.interpreter} $out/python
+        ln -s ${wheelhouse} $out/wheelhouse
+        ln -s ${directIndex} $out/direct.json
+        ln -s ${./split_requirements.py} $out/split_requirements.py
+        ${lib.optionalString hasInputs "ln -s ${buildSrc} $out/project"}
+      '';
 in
 {
   inherit
