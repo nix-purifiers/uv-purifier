@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+from source_snapshot import archive_source
 
 
 SAMPLE_REV = '49943b5a94413a530761350f04e896f76e8d620e'
@@ -71,8 +72,7 @@ def main():
     active = 'capture-lock'
     save()
     try:
-        metadata = json.loads(run('nix', 'flake', 'metadata', '--json', '--no-write-lock-file', str(sdk)))
-        snapshot = metadata['path']
+        metadata, snapshot = archive_source(run, sdk)
         report['source'] = {'path': snapshot, 'narHash': metadata['locked']['narHash'],
                             'revision': run('git', 'rev-parse', 'HEAD'),
                             'dirty': bool(run('git', 'status', '--porcelain', '--untracked-files=no')),

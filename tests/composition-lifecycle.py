@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+from source_snapshot import archive_source
 import tempfile
 import tomllib
 
@@ -33,8 +34,7 @@ if args.state_root:
     os.environ['UV_CACHE_DIR'] = str(state / 'uv-cache')
 root = Path(__file__).resolve().parents[1]
 system = run('nix', 'eval', '--impure', '--raw', '--expr', 'builtins.currentSystem')
-snapshot = json.loads(run('nix', 'flake', 'metadata', '--json', '--no-write-lock-file',
-                          'path:' + str(root)))['path']
+_, snapshot = archive_source(run, root)
 with tempfile.TemporaryDirectory(prefix='uv-lifecycle-') as directory:
     temporary = Path(directory)
     run('nix-store', '--add-root', temporary / 'source', '--realise', snapshot)

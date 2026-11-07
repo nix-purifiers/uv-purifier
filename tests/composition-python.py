@@ -5,10 +5,11 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from source_snapshot import archive_source
 import tempfile
 root=Path(__file__).resolve().parent.parent
 system=subprocess.check_output(['nix','eval','--impure','--raw','--expr','builtins.currentSystem'],text=True).strip()
-snapshot=json.loads(subprocess.check_output(['nix','flake','metadata','--json','--no-write-lock-file','path:'+str(root)],text=True))['path']
+_, snapshot = archive_source(lambda *command: subprocess.check_output(command, text=True).strip(), root)
 with tempfile.TemporaryDirectory(prefix='uv-target-python-') as temporary:
     temporary=Path(temporary)
     subprocess.run(['nix-store','--add-root',str(temporary/'source'),'--realise',snapshot],check=True)
