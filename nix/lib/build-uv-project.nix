@@ -590,7 +590,9 @@ let
         dontConfigure = true;
         buildPhase = ''
           runHook preBuild
-          ${installEnvironment "--no-dev --package ${lib.escapeShellArg m.name}" (memberClosure m.name)}
+          ${installEnvironment "--no-default-groups --package ${lib.escapeShellArg m.name}" (
+            memberClosure m.name
+          )}
           runHook postBuild
         '';
         # The scripts of the member and of the members it depends on, by

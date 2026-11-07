@@ -59,6 +59,8 @@ pkgs.runCommand "uv-flask-native-and-ordinary-runtime"
       grep missing-native-compiler "$TMPDIR/no-compiler.log"
     ''}
 
+    ${project.packages.flask}/bin/python -I ${./flask-runtime-graph.py} \
+      --projection ${project.packages.flask.projections.python}
     export UV_CACHE_DIR=$TMPDIR/ordinary-cache
     test ! -e "$UV_CACHE_DIR"
     uv venv --python ${python.interpreter} "$TMPDIR/ordinary"
@@ -76,6 +78,8 @@ pkgs.runCommand "uv-flask-native-and-ordinary-runtime"
     assert '+nix.' in version('flask')
     PYTHON
 
+    "$TMPDIR/ordinary/bin/python" -I ${./flask-runtime-graph.py} \
+      --projection ${project.packages.flask.projections.python}
     mkdir "$TMPDIR/incomplete"
     for wheel in ${project.packages.flask.projections.python}/*.whl; do
       case "$(basename "$wheel")" in
