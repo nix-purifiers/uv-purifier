@@ -1078,6 +1078,21 @@ def prefetch(root, lockfile, inputs=None):
         environment["PATH"] = compiler_bin + os.pathsep + environment.get("PATH", "")
     venv = os.environ.get("UV_PROJECT_ENVIRONMENT", os.path.join(root, ".venv"))
     python = os.path.join(venv, "bin", "python")
+    if os.path.exists(python):
+        probe = (
+            "import json,os,sys,sysconfig; "
+            "print(json.dumps([sys.implementation.name,list(sys.version_info[:3]),"
+            "sysconfig.get_config_var('SOABI'),"
+            "os.path.realpath(getattr(sys,'_base_executable',sys.executable))]))"
+        )
+        selected = os.path.join(inputs, "python")
+        expected = json.loads(subprocess.check_output([selected, "-I", "-c", probe], text=True))
+        installed = json.loads(subprocess.check_output([python, "-I", "-c", probe], text=True))
+        if installed != expected:
+            raise Error(
+                f"existing environment {venv} uses a different Python or ABI from the locked inputs; "
+                "recreate that environment with the selected Python, then run `uv-purifier prefetch`"
+            )
 
     def uv(*args):
         command = helper_uv() if args[0] == 'export' else 'uv'
