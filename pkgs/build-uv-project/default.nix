@@ -120,7 +120,30 @@ let
 
   # The details of the lockfiles that the builds need beyond the lock in
   # memory: which packages build, and with which build requirements.
-  lock = import ../../lib-overlays/default/lock.nix { inherit src lockFile uvLock; };
+  sourceLock = import ../../lib-overlays/default/lock.nix { inherit src lockFile uvLock; };
+  platformGraph = import ./platform-packages.nix { inherit lib; } {
+    uvLock = builtins.fromTOML (builtins.readFile uvLock);
+    memberKeys = map (member: member.key) sourceLock.members;
+    # OS facts follow the build platform. Other predicates remain unknown
+    # here; the selected SDK evaluates full markers when uv installs.
+    environment =
+      lib.optionalAttrs stdenv.hostPlatform.isLinux {
+        sys_platform = "linux";
+        os_name = "posix";
+        platform_system = "Linux";
+      }
+      // lib.optionalAttrs stdenv.hostPlatform.isDarwin {
+        sys_platform = "darwin";
+        os_name = "posix";
+        platform_system = "Darwin";
+      };
+  };
+  lock = sourceLock // {
+    distributions = filter (
+      package: builtins.hasAttr package.key platformGraph.keys
+    ) sourceLock.distributions;
+    direct = filter (package: builtins.hasAttr package.key platformGraph.keys) sourceLock.direct;
+  };
 
   inputRecords = lock.purifier.projectInputs or [ ];
   dependencies =
@@ -635,8 +658,8 @@ let
     ${uv}/bin/uv export --offline --frozen ${exportArgs} --no-emit-workspace \
       --format requirements.txt --output-file "$TMPDIR/exported.txt"
     sha256sum --check "$TMPDIR/native-lock.sha256"
-    ${python3.interpreter} -I ${./split_requirements.py} "$TMPDIR/exported.txt" ${directIndex} \
-      "$TMPDIR/requirements.txt" "$TMPDIR/direct-wheels.txt"
+    ${inputPython.interpreter} -I ${./split_requirements.py} "$TMPDIR/exported.txt" ${directIndex} \
+      "$TMPDIR/requirements.txt" "$TMPDIR/direct-wheels.txt" ${python.interpreter}
     uv venv --no-python-downloads --python ${python.interpreter} "$out"
     # uv export already contains the complete locked graph. Resolve no
     # transitive dependencies here: registry packages can depend on a git
