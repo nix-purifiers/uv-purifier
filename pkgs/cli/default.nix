@@ -30,7 +30,7 @@ let
 in
 stdenvNoCC.mkDerivation {
   pname = "uv-purifier";
-  version = lib.removeSuffix "\n" (builtins.readFile ../../version.txt);
+  version = import ../version.nix;
 
   src = lib.fileset.toSource {
     root = ../..;
