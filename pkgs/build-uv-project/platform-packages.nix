@@ -43,7 +43,22 @@ let
     let
       size = builtins.stringLength token;
       quoted = builtins.match ''("[^"]*"|'[^']*')'' token != null;
-      identifier = builtins.match "[[:alpha:]_][[:alnum:]_]*" token != null;
+      identifier = builtins.elem token [
+        "implementation_name"
+        "implementation_version"
+        "os_name"
+        "platform_machine"
+        "platform_release"
+        "platform_system"
+        "platform_version"
+        "python_full_version"
+        "platform_python_implementation"
+        "python_version"
+        "sys_platform"
+        "extra"
+        "extras"
+        "dependency_groups"
+      ];
       known =
         identifier
         && builtins.elem token [
@@ -55,6 +70,8 @@ let
     in
     {
       valid = (quoted && !(lib.hasInfix "\\" token)) || identifier;
+      inherit quoted;
+      variable = identifier;
       known = quoted || known;
       osVariable = known;
       text =
@@ -107,6 +124,7 @@ let
       if
         left.valid
         && right.valid
+        && ((left.variable && right.quoted) || (left.quoted && right.variable))
         && (!negate || builtins.elemAt tokens 2 == "in")
         && builtins.elem operator [
           "=="

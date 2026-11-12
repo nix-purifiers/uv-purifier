@@ -136,10 +136,18 @@ let
     }
     {
       marker = "sys_platform == 'win32' and '3.0' == '3.0.0'";
-      expected = false;
+      expected = null;
     }
     {
       marker = "'3.0' == '3.0.0'";
+      expected = null;
+    }
+    {
+      marker = "sys_platform != sys_platform";
+      expected = null;
+    }
+    {
+      marker = "sys_platform == 'win32' and unknown_variable == 'x'";
       expected = null;
     }
     {
