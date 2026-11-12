@@ -10,8 +10,8 @@
   # the source of the shared purifier library.
   cli = callPackage ./cli { purifierSource = null; };
 
-  # The builder of the purifier contract (nix/lib/build-uv-project.nix). A
+  # The builder of the purifier contract (pkgs/build-uv-project/default.nix). A
   # package written for callPackage takes the scope as `{ uv-purifier }:`
   # and calls `uv-purifier.buildUvProject { src = ./.; }`.
-  buildUvProject = callPackage ../nix/lib/build-uv-project.nix { inherit (lib) purifier; };
+  buildUvProject = callPackage ./build-uv-project/default.nix { inherit (lib) purifier; };
 }

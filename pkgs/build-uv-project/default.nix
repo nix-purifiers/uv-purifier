@@ -99,12 +99,12 @@ let
   # The lock in memory of the purifier contract, checked: evaluation fails
   # here with the problems of a stale, edited or incomplete lockfile.
   locked = purifier.checkLock (
-    import ./read-lock.nix { inherit lib; } { inherit src lockFile uvLock; }
+    import ../../lib-overlays/default/read-lock.nix { inherit lib; } { inherit src lockFile uvLock; }
   );
 
   # The details of the lockfiles that the builds need beyond the lock in
   # memory: which packages build, and with which build requirements.
-  lock = import ./lock.nix { inherit src lockFile uvLock; };
+  lock = import ../../lib-overlays/default/lock.nix { inherit src lockFile uvLock; };
 
   inputRecords = lock.purifier.projectInputs or [ ];
   dependencies =

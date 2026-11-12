@@ -223,7 +223,7 @@ def main():
               outputs = {self,sdk,target}: let
                 p=sdk.inputs.nixpkgs.legacyPackages.''' + system + ''';
                 old=import target {system="''' + system + '''";config.allowInsecure=true;};
-                build=p.callPackage (sdk.outPath+"/nix/lib/build-uv-project.nix") {
+                build=p.callPackage (sdk.outPath+"/pkgs/build-uv-project/default.nix") {
                   purifier=import sdk.inputs.purifier {lib=p.lib;};
                   ''' + ('nativeUv=p.callPackage (sdk.outPath + ' + json.dumps('/tests/sdk/' + args.native_uv_epoch + '.nix') + ') {};' if args.native_uv_epoch else '') + '''
                 };

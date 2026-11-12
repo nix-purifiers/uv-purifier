@@ -7,7 +7,7 @@ groups and optional dependencies, for every platform. A package from an
 index has its wheels and its sdist, with URLs and SHA-256 hashes. A package
 from git has its commit, one from a URL has the URL and the hash of the
 file, and one from a local path has the path and, for a file, its hash. The
-Nix library reads uv.lock with `builtins.fromTOML` (`nix/lib/lock.nix`).
+Nix library reads uv.lock with `builtins.fromTOML` (`lib-overlays/default/lock.nix`).
 
 uv.lock does not pin build requirements, which uv's build isolation
 resolves at build time. `uv-purifier lock` (`src/uv_purifier.py`) fills that
@@ -94,7 +94,7 @@ with the build's Python on the build's system (PEP 425 tags; on Linux
 manylinux 1, 2010, 2014 and `2_N` against the glibc of the package set,
 on macOS the arm64 and universal2 tags up to the package set's oldest
 macOS; `abi3`). For
-each package from an index, `nix/lib/build-uv-project.nix` takes its wheels
+each package from an index, `pkgs/build-uv-project/default.nix` takes its wheels
 that install, or else its sdist and the build of it. A build adds the files
 of its set of build requirements, chosen the same way, and the builds those
 need in turn. Every chosen file is a file entry, and the library's `tree`
@@ -117,7 +117,7 @@ setuptools-scm or hatch-vcs to read.
 A local path inside `src` is read from `src`. A path outside it, such as
 `../shared`, comes from the `pathSources` argument, because a flake's
 source tree cannot reach outside itself. The `uv-purifier` command maps
-such paths to their absolute locations itself (`nix/lib/cli.nix`).
+such paths to their absolute locations itself (`pkgs/cli/cli.nix`).
 
 ## Installing in the sandbox
 
@@ -129,7 +129,7 @@ wheelhouse, and with the Python of the package set (`UV_PYTHON`,
   sdist and then its wheel from the sdist, in an isolated environment that
   takes the build backend from the wheelhouse.
 - A member's environment starts from `uv export --frozen --no-dev
-  --package <member> --no-emit-workspace`. `nix/lib/split_requirements.py`
+  --package <member> --no-emit-workspace`. `pkgs/build-uv-project/split_requirements.py`
   takes out every requirement that does not come from an index (uv export
   writes those as `name @ <url>` or as a path) and replaces it with the
   wheel Nix built. The rest is installed with

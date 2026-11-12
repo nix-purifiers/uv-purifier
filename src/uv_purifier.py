@@ -461,7 +461,7 @@ def scratch_project(root, uv_lock, workdir):
 
 def derived_outputs(package, pyproject):
     """The outputs of a workspace member that the Nix library derives from
-    uv.lock and the member's pyproject.toml (nix/lib/build-uv-project.nix,
+    uv.lock and the member's pyproject.toml (pkgs/build-uv-project/default.nix,
     derivedOutputs): the sdist and a pure wheel named after the normalized
     name and the version uv.lock records, and the scripts of
     [project.scripts] and [project.gui-scripts]. A field the build makes
@@ -513,7 +513,7 @@ def member_outputs(root, name, workdir):
 def inputs_hash(root, tree_dirs):
     """The hash the Nix library compares to tell whether the lockfile still
     matches uv.lock and the pyproject.toml files of the source trees in the
-    project. nix/lib/lock.nix computes the same text. A source tree outside
+    project. lib-overlays/default/lock.nix computes the same text. A source tree outside
     the project contributes no file, because the Nix build may take it from
     elsewhere."""
     files = ["uv.lock"] + sorted(
@@ -934,7 +934,7 @@ def nix_build(root, lockfile, package=None, out_link=None):
     args = [
         "nix-build",
         *(["--out-link", out_link] if out_link else ["--no-out-link"]),
-        os.path.join(library, "cli.nix"),
+        os.path.join(library, "../cli/cli.nix"),
         "--arg", "nixpkgs", nixpkgs,
         "--arg", "purifier", purifier,
         "--argstr", "src", root,

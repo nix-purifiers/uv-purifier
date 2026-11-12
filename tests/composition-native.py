@@ -102,7 +102,7 @@ build-backend = "hatchling.build"
     expression = """let
       f = builtins.getFlake ("path:" + builtins.getEnv "UV_COMPOSITION_FLAKE");
       p = import f.inputs.nixpkgs {};
-      build = p.callPackage (f.outPath + "/nix/lib/build-uv-project.nix") {
+      build = p.callPackage (f.outPath + "/pkgs/build-uv-project/default.nix") {
         purifier = import f.inputs.purifier { lib = p.lib; };
       };
       source = builtins.path {
