@@ -1,0 +1,11 @@
+[project]
+name = "active-editable"
+version = "1"
+requires-python = ">=3.12"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["active_editable"]

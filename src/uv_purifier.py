@@ -140,6 +140,12 @@ def workspace_members(uv_lock):
     }
 
 
+def editable_source(package, members):
+    """Whether native preparation installs this source as editable."""
+    kind, _ = source_kind(package)
+    return kind == "editable" or (kind == "directory" and package["name"] in members)
+
+
 def parse_git_source(value):
     """Splits a git source of uv.lock, such as
     `https://host/repo?tag=v1&subdirectory=pkg#<commit>`, into the
@@ -202,11 +208,7 @@ backend = importlib.import_module(module)
 for part in filter(None, attribute.split(".")):
     backend = getattr(backend, part)
 requires, failed = [], {}
-for hook in (
-    "get_requires_for_build_sdist",
-    "get_requires_for_build_wheel",
-    "get_requires_for_build_editable",
-):
+for hook in json.loads(sys.argv[3]):
     if hasattr(backend, hook):
         try:
             requires += getattr(backend, hook)({})
@@ -216,9 +218,10 @@ print(json.dumps({"requires": requires, "failed": failed}))
 """
 
 
-def dynamic_requires(tree, pyproject, static, workdir):
+def dynamic_requires(tree, pyproject, static, workdir, *, editable=False):
     """The requirements the build backend of a source tree reports through
-    its PEP 517 hooks for an sdist, a wheel and an editable install. A
+    its PEP 517 hooks for an sdist, a wheel and, for editable sources,
+    an editable install. A
     backend such as hatchling asks for `editables` only this way."""
     build_system = pyproject.get("build-system", {})
     backend = build_system.get("build-backend", DEFAULT_BUILD_BACKEND)
@@ -228,16 +231,20 @@ def dynamic_requires(tree, pyproject, static, workdir):
         result = run_uv(args, cwd=tree, env=resolution_env())
         if result.returncode != 0:
             raise Error(f"installing the build requirements {', '.join(static)} failed:\n{result.stderr.strip()}")
-    result = subprocess.run(
-        [os.path.join(venv, "bin", "python"), "-c", HOOKS_SCRIPT, backend, json.dumps(backend_path)],
-        cwd=tree,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise Error(f"the build backend {backend} failed to report its requirements:\n{result.stderr.strip()}")
-    report = json.loads(result.stdout.strip().splitlines()[-1])
+    def probe(hooks):
+        result = subprocess.run(
+            [os.path.join(venv, "bin", "python"), "-c", HOOKS_SCRIPT,
+             backend, json.dumps(backend_path), json.dumps(hooks)],
+            cwd=tree, text=True, capture_output=True, check=False,
+        )
+        if result.returncode != 0:
+            raise Error(f"the build backend {backend} failed to report its requirements:\n{result.stderr.strip()}")
+        return json.loads(result.stdout.strip().splitlines()[-1])
+
+    hooks = ["get_requires_for_build_sdist", "get_requires_for_build_wheel"]
+    if editable:
+        hooks.append("get_requires_for_build_editable")
+    report = probe(hooks)
     failed = report["failed"]
     if "get_requires_for_build_wheel" in failed:
         raise Error(
@@ -276,13 +283,13 @@ def scratch_copy(tree, workdir):
     return copy
 
 
-def tree_requirements(tree, workdir):
+def tree_requirements(tree, workdir, *, editable=False):
     """Every build requirement of a source tree: the static ones of its
     [build-system] table and the ones its backend adds."""
     pyproject = tree_pyproject(tree)
     static = build_requires(pyproject)
     requires = list(static)
-    for requirement in dynamic_requires(tree, pyproject, static, workdir):
+    for requirement in dynamic_requires(tree, pyproject, static, workdir, editable=editable):
         if requirement not in requires:
             requires.append(requirement)
     return requires
@@ -451,6 +458,13 @@ def scratch_project(root, uv_lock, workdir):
     base = tempfile.mkdtemp(dir=workdir)
     copy = os.path.join(base, *(["nested"] * depth), "project")
     shutil.copytree(root, copy, ignore=shutil.ignore_patterns(".git", ".venv", "__pycache__", "dist", ".uv-purifier"))
+    # Workspace versions may be computed from VCS and absent from uv.lock.
+    # Capture their real native outputs while retaining writable scratch
+    # sources. The resulting wheel/sdist names pin that version for Nix.
+    git = subprocess.run(["git", "-C", root, "rev-parse", "--absolute-git-dir"],
+                         capture_output=True, text=True, check=False)
+    if git.returncode == 0:
+        os.symlink(git.stdout.strip(), os.path.join(copy, ".git"))
     for path in outside:
         link = os.path.normpath(os.path.join(copy, path))
         if not os.path.exists(link):
@@ -482,14 +496,37 @@ def derived_outputs(package, pyproject):
     }
 
 
-def member_outputs(root, name, workdir):
+def uv_build_pin(captured, key=None):
+    """Pin uv's bundled backend to the captured package, not its compatibility range."""
+    sets = captured.get('buildRequirements', [])
+    if key is not None:
+        index = captured.get('builds', {}).get(key)
+        sets = [sets[index]] if index is not None else []
+    versions = {package['version'] for entry in sets for package in entry.get('packages', [])
+                if package['name'] == 'uv-build'}
+    # A combined registry install has no individual build key. Only apply
+    # a common pin when the captured builds agree; source installs below
+    # use their individual keys and never flatten different backend versions.
+    return 'uv-build==' + next(iter(versions)) + '\n' if len(versions) == 1 else ''
+
+
+def member_outputs(root, name, workdir, backend_pin=''):
     """What a workspace member's build produces, from one `uv build` of it:
     the file names of its sdist and wheel, and the scripts the wheel
     installs (its console_scripts and gui_scripts entry points, which
     include scripts that a setup.py defines)."""
     out = tempfile.mkdtemp(dir=workdir)
     log(f"building {name} to record its outputs")
-    result = run_helper_uv(["build", "--package", name, "--out-dir", out], cwd=root)
+    constraints = []
+    if backend_pin:
+        path = os.path.join(out, 'build-constraints.txt')
+        with open(path, 'w') as target:
+            target.write(backend_pin)
+        constraints = ['--build-constraints', path]
+    result = run_helper_uv(["build", "--force-pep517", *constraints,
+                            "--package", name, "--out-dir", out], cwd=root)
+    if constraints:
+        os.unlink(path)
     if result.returncode != 0:
         raise Error(f"`uv build --package {name}` failed:\n{result.stderr.strip()}")
     files = sorted(n for n in os.listdir(out) if n != ".gitignore")
@@ -739,13 +776,13 @@ def native_lock(root, lockfile, upgrade=False):
     def outside_or_local(path):
         return path if os.path.isabs(path) else os.path.normpath(os.path.join(root, path))
 
-    def request_tree(key, tree, workdir):
+    def request_tree(key, tree, workdir, *, editable=False):
         """Locks the build requirements of a source tree. When its backend
         cannot report the requirements it adds, the static ones stand, and
         a build that needs more fails in the sandbox with uv's error."""
         log(f"reading the build requirements of {key}")
         try:
-            requires = tree_requirements(tree, workdir)
+            requires = tree_requirements(tree, workdir, editable=editable)
         except Error as e:
             log(f"using only the static build requirements of {key}: {e}")
             requires = build_requires(tree_pyproject(tree))
@@ -759,7 +796,8 @@ def native_lock(root, lockfile, upgrade=False):
                 tree_dirs.append(value)
                 if kind == "virtual":
                     continue
-                request_tree(key, scratch_copy(outside_or_local(value), workdir), workdir)
+                request_tree(key, scratch_copy(outside_or_local(value), workdir), workdir,
+                             editable=editable_source(package, workspace_members(uv_lock)))
             elif kind == "registry":
                 if may_need_build(package):
                     sdist = package["sdist"]
@@ -838,7 +876,9 @@ def native_lock(root, lockfile, upgrade=False):
         for package in uv_lock.get("package", []):
             if package["name"] not in members or source_kind(package)[0] == "virtual":
                 continue
-            made = member_outputs(project, package["name"], workdir)
+            made = member_outputs(project, package["name"], workdir,
+                                  uv_build_pin({'buildRequirements': requirement_sets, 'builds': builds},
+                                               package_key(package)))
             derived = derived_outputs(
                 package, tree_pyproject(os.path.join(root, source_kind(package)[1]))
             )
@@ -918,7 +958,102 @@ def project_python(root):
     return found.stdout.strip()
 
 
-def nix_build(root, lockfile, package=None, out_link=None):
+@contextlib.contextmanager
+def project_runtime(root):
+    previous = os.environ.get('UV_PYTHON')
+    selected = project_python(root)
+    os.environ['UV_PYTHON'] = selected
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop('UV_PYTHON', None)
+        else:
+            os.environ['UV_PYTHON'] = previous
+
+
+def python_identity(executable):
+    return json.loads(subprocess.check_output([executable, '-I', '-c',
+        'import json,os,platform,sys,sysconfig\n'
+        'try:\n libc=os.confstr("CS_GNU_LIBC_VERSION")\n'
+        'except (AttributeError,OSError,ValueError):\n libc=None\n'
+        'iv=sys.implementation.version\n'
+        'implementation_version="%d.%d.%d" % iv[:3]\n'
+        'if iv.releaselevel!="final":\n implementation_version += {"alpha":"a","beta":"b","candidate":"rc"}.get(iv.releaselevel,iv.releaselevel)+str(iv.serial)\n'
+        'print(json.dumps({"version":"%d.%d" % sys.version_info[:2],'
+        '"fullVersion":list(sys.version_info[:3]),'
+        '"implementation":getattr(sys.implementation,"name",None),'
+        '"soabi":sysconfig.get_config_var("SOABI"),'
+        '"executable":os.path.realpath(getattr(sys,"_base_executable",sys.executable)),'
+        '"freeThreaded":bool(sysconfig.get_config_var("Py_GIL_DISABLED")),'
+        '"glibc":libc.split()[1] if libc and libc.startswith("glibc ") else None,'
+        '"markers":{"implementation_name":sys.implementation.name,"implementation_version":implementation_version,'
+        '"os_name":os.name,"platform_machine":platform.machine(),"platform_release":platform.release(),'
+        '"platform_system":platform.system(),"platform_version":platform.version(),'
+        '"python_full_version":platform.python_version(),"platform_python_implementation":platform.python_implementation(),'
+        '"python_version":"%d.%d" % sys.version_info[:2],"sys_platform":sys.platform}}))'], text=True))
+
+
+def active_requirement_blocks(lines, marker_environment):
+    from packaging.requirements import Requirement
+    current = []
+    blocks = []
+    for line in lines:
+        if line and not line[0].isspace() and not line.startswith('#') and current:
+            blocks.append(current)
+            current = []
+        current.append(line)
+    if current:
+        blocks.append(current)
+    for block in blocks:
+        head = next((line.rstrip().removesuffix('\\').strip() for line in block
+                     if line and not line[0].isspace() and not line.startswith('#')), None)
+        if head is None:
+            yield block
+            continue
+        text = head.removeprefix('-e ').strip()
+        if not re.match(r'^[A-Za-z0-9._-]+(?:\[[^\]]*\])?==', text) and ' @ ' not in text:
+            text = 'uv-local-source @ ' + text
+        requirement = Requirement(text)
+        if requirement.marker is None or requirement.marker.evaluate(marker_environment):
+            yield block
+
+
+def active_registry_packages(root, selected_python, group_args):
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+    with tempfile.TemporaryDirectory(prefix='uv-selected-requirements-') as temporary:
+        exported = os.path.join(temporary, 'requirements.txt')
+        result = run_helper_uv(['export', '--offline', '--frozen', '--all-packages', *group_args,
+            '--no-emit-workspace', '--format', 'requirements.txt', '--output-file', exported], cwd=root,
+            env=dict(os.environ, UV_PYTHON=selected_python['executable'], UV_PYTHON_DOWNLOADS='never'))
+        if result.returncode:
+            raise Error('exporting the selected locked graph failed: ' + result.stderr.strip())
+        selected = set()
+        with open(exported) as source:
+            for block in active_requirement_blocks(source.read().splitlines(), selected_python['markers']):
+                line = next((line for line in block if line and not line[0].isspace() and not line.startswith('#')), '')
+                if not re.match(r'^[A-Za-z0-9._-]+(?:\[[^\]]*\])?==', line):
+                    continue
+                requirement = Requirement(line.rstrip().removesuffix('\\').strip())
+                for specifier in requirement.specifier:
+                    if specifier.operator != '==':
+                        raise Error('the frozen export did not pin ' + requirement.name)
+                    selected.add(canonicalize_name(requirement.name) + '==' + specifier.version)
+        return sorted(selected)
+
+
+def target_wheel_tags(executable):
+    tools = os.environ.get('UV_PURIFIER_PROJECT_INPUTS_TOOLS')
+    if not tools:
+        raise Error('the uv-purifier package must supply its Python compatibility helper')
+    return json.loads(subprocess.check_output([sys.executable, '-I', '-c',
+        'import json,sys; sys.path.insert(0,sys.argv[1]); '
+        'from python_repository import interpreter_tags; '
+        'print(json.dumps(interpreter_tags(sys.argv[2])))', tools, executable], text=True))
+
+
+def nix_build(root, lockfile, package=None, out_link=None, local=False, selected_python=None, active_packages=None):
     """Builds, with the Nix library this program was installed with, a
     member's release (its sdist and wheel), or without `package` the inputs
     of a development environment. Returns the store path. With `out_link`,
@@ -939,22 +1074,23 @@ def nix_build(root, lockfile, package=None, out_link=None):
         "--arg", "purifier", purifier,
         "--argstr", "src", root,
     ]
-    selected_python = json.loads(subprocess.check_output([project_python(root), '-I', '-c',
-        'import json,os,sys,sysconfig\n'
-        'try:\n libc=os.confstr("CS_GNU_LIBC_VERSION")\n'
-        'except (AttributeError,OSError,ValueError):\n libc=None\n'
-        'print(json.dumps({"version":"%d.%d" % sys.version_info[:2],'
-        '"executable":os.path.realpath(sys.executable),'
-        '"freeThreaded":bool(sysconfig.get_config_var("Py_GIL_DISABLED")),'
-        '"glibc":libc.split()[1] if libc and libc.startswith("glibc ") else None}))'], text=True))
+    selected_python = selected_python or python_identity(project_python(root))
     args += ["--argstr", "pythonVersion", selected_python['version']]
     # Reuse the selected immutable Nix interpreter, including historical package
     # sets absent from the helper's nixpkgs. Never infer a different patch release.
-    if selected_python['executable'].startswith('/nix/store/'):
+    if local or selected_python['executable'].startswith('/nix/store/'):
         args += ["--argstr", "pythonInterpreter", selected_python['executable']]
         args += ['--arg', 'pythonFreeThreaded', 'true' if selected_python.get('freeThreaded') else 'false']
         if selected_python.get('glibc'):
             args += ["--argstr", "pythonGlibcVersion", selected_python['glibc']]
+    else:
+        raise Error('a sandboxed release needs an immutable Nix SDK; select one with UV_PYTHON '
+                    'or pass python to buildUvProject. Local lock/prefetch keeps your existing runtime.')
+    if local:
+        args += ['--arg', 'localInputs', 'true', '--arg', 'pythonWheelTags',
+                 'builtins.fromJSON ' + json.dumps(json.dumps(target_wheel_tags(selected_python['executable'])))]
+        if active_packages is not None:
+            args += ['--arg', 'pythonActivePackages', 'builtins.fromJSON ' + json.dumps(json.dumps(active_packages))]
     for variable, argument in [('UV_PURIFIER_NATIVE_UV_PACKAGE', 'nativeUvPackage'),
                                ('UV_PURIFIER_HELPER_UV_PACKAGE', 'uvHelperPackage')]:
         if os.environ.get(variable):
@@ -969,7 +1105,7 @@ def nix_build(root, lockfile, package=None, out_link=None):
     return result.stdout.strip().splitlines()[-1]
 
 
-def editable_trees(root):
+def editable_trees(root, active_paths=None):
     """The source trees `prefetch` installs as editable: every workspace
     member with a build, and every editable path dependency."""
     with open(os.path.join(root, "uv.lock"), "rb") as f:
@@ -978,7 +1114,8 @@ def editable_trees(root):
     trees = []
     for package in uv_lock.get("package", []):
         kind, value = source_kind(package)
-        if kind == "editable" or (kind == "directory" and package["name"] in members):
+        member = package['name'] in members
+        if editable_source(package, members) and (member or active_paths is None or os.path.normpath(value) in active_paths):
             trees.append(value)
     return trees
 
@@ -1031,7 +1168,8 @@ def tool_lockfile(root, outside, writes):
             os.remove(in_tree)
 
 
-def prefetch(root, lockfile, inputs=None):
+def prefetch(root, lockfile, inputs=None, groups=None, all_groups=False,
+             excluded_groups=None, extras=None, all_extras=False):
     """Realizes in the Nix store everything the locked development needs on
     this system, kept alive by a garbage-collector root beside the purifier
     lockfile, and
@@ -1042,8 +1180,30 @@ def prefetch(root, lockfile, inputs=None):
     editor work with no network."""
     if inputs is None:
         check_lockfile(root, lockfile)
+    selected_python = python_identity(project_python(root))
+    group_args = [argument for group in (groups or []) for argument in ('--group', group)]
+    group_args += [argument for group in (excluded_groups or []) for argument in ('--no-group', group)]
+    group_args += [argument for extra in (extras or []) for argument in ('--extra', extra)]
+    if all_groups:
+        group_args.append('--all-groups')
+    if all_extras:
+        group_args.append('--all-extras')
+    if inputs is None:
         log("building the locked files with Nix")
-        inputs = nix_build(root, lockfile, out_link=os.path.join(os.path.dirname(lockfile), GC_ROOT))
+        inputs = nix_build(root, lockfile, out_link=os.path.join(os.path.dirname(lockfile), GC_ROOT),
+                           local=True, selected_python=selected_python,
+                           active_packages=active_registry_packages(root, selected_python, group_args))
+    native = os.path.isfile(os.path.join(inputs, 'native-sources.json'))
+    captured = {}
+    tree_keys = {}
+    if native:
+        with open(lockfile) as source:
+            captured = json.load(source)
+        with open(os.path.join(root, 'uv.lock'), 'rb') as source:
+            for package in tomllib.load(source).get('package', []):
+                kind, value = source_kind(package)
+                if kind in ('editable', 'directory'):
+                    tree_keys[os.path.normpath(value)] = package_key(package)
     # uv gets a cache of its own. With the user's cache, which holds index
     # data from earlier online runs, uv picks distributions from that index
     # data even with UV_NO_INDEX, and then fails offline to download them.
@@ -1059,47 +1219,33 @@ def prefetch(root, lockfile, inputs=None):
         UV_FIND_LINKS=os.path.join(inputs, "wheelhouse"),
         UV_PYTHON_DOWNLOADS="never",
         UV_CACHE_DIR=cache,
+        # Runtime preparation modifies installed ELF files. Keep the shared
+        # unpacked wheel cache immutable across environments and targets.
+        UV_LINK_MODE="copy",
+        UV_PYTHON=selected_python['executable'],
     )
-    # A locked sdist may contain a native extension. Use the same immutable
-    # compiler as the pure builder, rather than depending on a host gcc.
-    compiler_environment = os.path.join(inputs, "compiler-env.json")
-    if os.path.isfile(compiler_environment):
-        # Captured setup replaces ambient toolchain overrides. In particular,
-        # an SDK absent on this platform must not leak in from the caller.
-        for name in ("CC", "CXX", "AR", "AS", "LD", "NM", "RANLIB", "STRIP",
-                     "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "NIX_CFLAGS_COMPILE",
-                     "NIX_CFLAGS_COMPILE_FOR_BUILD", "NIX_LDFLAGS", "NIX_CFLAGS_LINK",
-                     "NIX_APPLE_SDK_VERSION", "NIX_CC", "NIX_BINTOOLS"):
-            environment.pop(name, None)
-        with open(compiler_environment) as compiler_settings:
-            environment.update(json.load(compiler_settings))
-    compiler_bin = os.path.join(inputs, "bin")
-    if os.path.isdir(compiler_bin):
-        environment["PATH"] = compiler_bin + os.pathsep + environment.get("PATH", "")
     venv = os.environ.get("UV_PROJECT_ENVIRONMENT", os.path.join(root, ".venv"))
     python = os.path.join(venv, "bin", "python")
     if os.path.exists(python):
-        probe = (
-            "import json,os,sys,sysconfig; "
-            "print(json.dumps([sys.implementation.name,list(sys.version_info[:3]),"
-            "sysconfig.get_config_var('SOABI'),"
-            "os.path.realpath(getattr(sys,'_base_executable',sys.executable))]))"
-        )
-        selected = os.path.join(inputs, "python")
-        expected = json.loads(subprocess.check_output([selected, "-I", "-c", probe], text=True))
-        installed = json.loads(subprocess.check_output([python, "-I", "-c", probe], text=True))
-        if installed != expected:
-            raise Error(
-                f"existing environment {venv} uses a different Python or ABI from the locked inputs; "
-                "recreate that environment with the selected Python, then run `uv-purifier prefetch`"
-            )
+        installed_python = python_identity(python)
+        fields = ('executable', 'fullVersion', 'implementation', 'soabi', 'freeThreaded')
+        if any(installed_python.get(field) != selected_python.get(field) for field in fields):
+            raise Error(f'{venv} uses a different runtime from {selected_python["executable"]}; '
+                        'recreate that environment explicitly before prefetching')
 
-    def uv(*args):
+    def uv(*args, overrides=None, build_key=None):
         command = helper_uv() if args[0] == 'export' else 'uv'
+        pin = uv_build_pin(captured, build_key) if native and args[0] == 'pip' else ''
+        if pin:
+            path = os.path.join(workdir, 'backend-' + hashlib.sha256(pin.encode()).hexdigest() + '.txt')
+            with open(path, 'w') as target:
+                target.write(pin)
+            args = (*args[:2], '--build-constraints', path, *args[2:])
         # These installs consume the selected lock/projection. Reapplying
         # project resolver overrides here breaks old uv's hash-checking mode.
         config = ['--no-config'] if args[0] == 'pip' else []
-        result = subprocess.run([command, *config, *args], cwd=root, env=environment, check=False)
+        result = subprocess.run([command, *config, *args], cwd=root,
+                                env=environment | (overrides or {}), check=False)
         if result.returncode != 0:
             raise Error(f"`uv {' '.join(args)}` failed")
 
@@ -1108,18 +1254,38 @@ def prefetch(root, lockfile, inputs=None):
         requirements = os.path.join(workdir, "requirements.txt")
         wheels = os.path.join(workdir, "wheels.txt")
         effective = os.path.join(inputs, "project")
+        direct_index = os.path.join(inputs, 'direct.json')
+        if native and os.path.isfile(os.path.join(inputs, 'input-views.json')):
+            with open(os.path.join(root, 'uv.lock'), 'rb') as source:
+                effective = scratch_project(root, tomllib.load(source), workdir)
+            direct_index = os.path.join(workdir, 'direct.json')
+            shutil.copyfile(os.path.join(inputs, 'direct.json'), direct_index)
+            prepared = subprocess.run([sys.executable, '-I', '-c',
+                'import runpy,sys; sys.path.insert(0,sys.argv.pop(1)); '
+                'script=sys.argv.pop(1);sys.argv[0]=script;runpy.run_path(script,run_name="__main__")',
+                os.path.join(inputs, 'project-inputs-tools'), os.path.join(inputs, 'python-inputs.py'),
+                '--python', selected_python['executable'], '--project', effective,
+                '--views', os.path.join(inputs, 'input-views.json'),
+                '--old-repositories', os.path.join(inputs, 'old-repositories.json'),
+                '--index', direct_index, '--wheelhouse', os.path.join(workdir, 'provided-wheels')], check=False)
+            if prepared.returncode:
+                raise Error('applying supplied Python dependencies to the local runtime failed')
         project_args = ["--project", effective] if os.path.isdir(effective) else []
-        uv("export", *project_args, "--offline", "--frozen", "--all-packages", "--no-emit-workspace",
+        uv("export", *project_args, "--offline", "--frozen", "--all-packages", *group_args, "--no-emit-workspace",
            "--format", "requirements.txt", "--output-file", exported)
+        with open(exported) as source:
+            selected_blocks = list(active_requirement_blocks(source.read().splitlines(), selected_python['markers']))
+        with open(exported, 'w') as output:
+            output.write('\n'.join(line for block in selected_blocks for line in block) + '\n')
         result = subprocess.run(
             [sys.executable, "-I", os.path.join(inputs, "split_requirements.py"),
-             exported, os.path.join(inputs, "direct.json"), requirements, wheels],
+             exported, direct_index, requirements, wheels],
             check=False,
         )
         if result.returncode != 0:
             raise Error("splitting the exported requirements failed")
         if not os.path.exists(python):
-            uv("venv", "--no-python-downloads", "--python", os.path.join(inputs, "python"), venv)
+            uv("venv", "--no-python-downloads", "--python", selected_python['executable'], venv)
         # An empty registry subset is intentional when all remaining runtime
         # wheels are supplied by Nix, or the project dropped its last dependency.
         # uv otherwise leaves stale packages in this managed environment.
@@ -1130,19 +1296,68 @@ def prefetch(root, lockfile, inputs=None):
         if empty:
             sync.append("--allow-empty-requirements")
         uv(*sync, requirements)
+        native_sources = {}
+        if native:
+            with open(os.path.join(inputs, 'native-sources.json')) as source:
+                native_sources = {item['source']: item for item in json.load(source)}
         with open(wheels) as f:
-            for directory in f.read().split():
+            for directory in f.read().splitlines():
+                if not directory:
+                    continue
+                if directory in native_sources:
+                    details = native_sources[directory]
+                    if os.path.isdir(directory):
+                        source = scratch_copy(directory, workdir)
+                    elif (details.get('filename') or '').endswith('.whl'):
+                        destination = tempfile.mkdtemp(dir=workdir)
+                        source = os.path.join(destination, details.get('filename') or os.path.basename(directory))
+                        shutil.copyfile(directory, source)
+                    else:
+                        source = unpack(directory, workdir)
+                        subprocess.run(['chmod', '-R', 'u+w', source], check=True)
+                    overrides = {'SETUPTOOLS_SCM_PRETEND_VERSION': details['version']} if details.get('version') else {}
+                    uv('pip', 'install', '--offline', '--no-index', '--python', python, '--no-deps', source,
+                       overrides=overrides, build_key=details.get('key'))
+                    continue
                 files = [
                     os.path.join(directory, n)
                     for n in sorted(os.listdir(directory))
                     if n.endswith(".whl")
                 ]
                 uv("pip", "install", "--offline", "--no-index", "--python", python, "--no-deps", *files)
-        trees = editable_trees(root)
+        from packaging.requirements import Requirement
+        active_editables = set()
+        for block in selected_blocks:
+            head = next((line.rstrip().removesuffix('\\').strip() for line in block
+                         if line and not line[0].isspace() and not line.startswith('#')), '')
+            if not head.startswith('-e '):
+                continue
+            path = Requirement('uv-local-source @ ' + head[3:].strip()).url
+            url = urllib.parse.urlsplit(path)
+            if url.scheme == 'file' and url.netloc in ('', 'localhost'):
+                path = urllib.parse.unquote(url.path)
+            active_editables.add(os.path.normpath(path))
+            if os.path.isabs(path) and path.startswith((effective if os.path.isdir(effective) else root) + os.sep):
+                path = os.path.relpath(path, effective if os.path.isdir(effective) else root)
+            active_editables.add(os.path.normpath(path))
+            if not os.path.isabs(path):
+                active_editables.add(os.path.normpath(os.path.join(root, path)))
+        trees = editable_trees(root, active_paths=active_editables)
         if trees:
-            editables = [a for tree in trees for a in ("--editable", tree)]
-            uv("pip", "install", "--offline", "--no-index", "--find-links", os.path.join(inputs, "wheelhouse"),
-               "--python", python, "--no-deps", *editables)
+            versions_path = os.path.join(inputs, "editable-versions.json")
+            versions = {}
+            if os.path.isfile(versions_path):
+                with open(versions_path) as source:
+                    versions = {os.path.normpath(path): version for path, version in json.load(source).items()}
+            for tree in trees:
+                version = versions.get(os.path.normpath(tree))
+                overrides = {"SETUPTOOLS_SCM_PRETEND_VERSION": version} if version else {}
+                uv("pip", "install", "--offline", "--no-index", "--find-links", os.path.join(inputs, "wheelhouse"),
+                   "--python", python, "--no-deps", "--editable", tree, overrides=overrides,
+                   build_key=tree_keys.get(os.path.normpath(tree)))
+    prepare_runtime = os.path.join(inputs, "prepare-runtime")
+    if os.path.isfile(prepare_runtime):
+        subprocess.run([prepare_runtime, venv], check=True)
     log(f"installed {venv}; run commands in it with `uv run --no-sync`")
 
 
@@ -1214,9 +1429,15 @@ def main(argv=None):
     common(prefetch_parser)
     prefetch_parser.add_argument(
         "--inputs",
-        help="the inputs Nix built for the project (the `interactive` output of buildUvProject); "
+        help="previously realized native inputs, or an explicitly supplied compatible `interactive` output; "
         "built with Nix when absent",
     )
+    prefetch_parser.add_argument("--group", action="append", default=[],
+                                 help="include a locked dependency group in addition to the defaults (repeatable)")
+    prefetch_parser.add_argument("--all-groups", action="store_true", help="include every locked dependency group")
+    prefetch_parser.add_argument("--no-group", action="append", default=[], help="exclude a dependency group (repeatable)")
+    prefetch_parser.add_argument("--extra", action="append", default=[], help="include a locked project extra (repeatable)")
+    prefetch_parser.add_argument("--all-extras", action="store_true", help="include every locked project extra")
     publish_parser = sub.add_parser(
         "publish",
         help="upload with `uv publish` the release that Nix built",
@@ -1240,13 +1461,15 @@ def main(argv=None):
     named_tool = args.tool_lockfile or os.environ.get(TOOL_LOCKFILE_VARIABLE)
     outside = os.path.abspath(named_tool) if named_tool else None
     try:
-        with tool_lockfile(root, outside, writes=args.command in ("lock", "update")):
+        runtime = project_runtime(root) if args.command in ('lock', 'update') else contextlib.nullcontext()
+        with tool_lockfile(root, outside, writes=args.command in ("lock", "update")), runtime:
             if args.command == "lock":
                 lock(root, lockfile, inputs=[] if args.no_inputs else args.input)
             elif args.command == "update":
                 update(root, lockfile, args.packages, [] if args.no_inputs else args.input)
             elif args.command == "prefetch":
-                prefetch(root, lockfile, args.inputs)
+                prefetch(root, lockfile, args.inputs, groups=args.group, all_groups=args.all_groups,
+                         excluded_groups=args.no_group, extras=args.extra, all_extras=args.all_extras)
             elif args.command == "publish":
                 extra = args.uv_publish_args
                 if extra and extra[0] == "--":
