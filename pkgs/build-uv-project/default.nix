@@ -138,12 +138,16 @@ let
         platform_system = "Darwin";
       };
   };
-  lock = sourceLock // {
-    distributions = filter (
-      package: builtins.hasAttr package.key platformGraph.keys
-    ) sourceLock.distributions;
-    direct = filter (package: builtins.hasAttr package.key platformGraph.keys) sourceLock.direct;
-  };
+  # Local adoption already has the selected interpreter's probed active
+  # graph. Never substitute the Nix host's OS facts for that interpreter.
+  lock =
+    sourceLock
+    // lib.optionalAttrs (!(python ? activePackages)) {
+      distributions = filter (
+        package: builtins.hasAttr package.key platformGraph.keys
+      ) sourceLock.distributions;
+      direct = filter (package: builtins.hasAttr package.key platformGraph.keys) sourceLock.direct;
+    };
 
   inputRecords = lock.purifier.projectInputs or [ ];
   dependencies =
