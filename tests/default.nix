@@ -338,7 +338,7 @@ in
           root = ../.;
           fileset = lib.fileset.unions [
             ../src
-            ../nix/lib
+            ../pkgs/build-uv-project
             ./unit
             ./fixtures/simple
           ];

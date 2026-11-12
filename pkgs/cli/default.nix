@@ -36,7 +36,9 @@ stdenvNoCC.mkDerivation {
     root = ../..;
     fileset = lib.fileset.unions [
       ../../src
-      ../../nix/lib
+      ../build-uv-project
+      ./cli.nix
+      ../../lib-overlays/default
     ];
   };
 
@@ -46,7 +48,10 @@ stdenvNoCC.mkDerivation {
     runHook preInstall
     mkdir -p $out/bin $out/share/uv-purifier
     cp src/uv_purifier.py $out/share/uv-purifier/
-    cp -r nix/lib $out/share/uv-purifier/nix-lib
+    mkdir -p $out/share/uv-purifier/pkgs/cli
+    cp -r pkgs/build-uv-project $out/share/uv-purifier/pkgs/
+    cp pkgs/cli/cli.nix $out/share/uv-purifier/pkgs/cli/
+    cp -r lib-overlays $out/share/uv-purifier/
     makeWrapper ${python.interpreter} $out/bin/uv-purifier \
       --add-flags "-I $out/share/uv-purifier/uv_purifier.py" \
       --prefix PATH : ${
@@ -56,7 +61,7 @@ stdenvNoCC.mkDerivation {
           nix-prefetch-git
         ]
       } \
-      --set UV_PURIFIER_NIX_LIB $out/share/uv-purifier/nix-lib \
+      --set UV_PURIFIER_NIX_LIB $out/share/uv-purifier/pkgs/build-uv-project \
       --set UV_PURIFIER_NIXPKGS ${path} \
       --set UV_PURIFIER_LIBRARY ${library} \
       --set UV_PURIFIER_PROJECT_INPUTS_TOOLS ${library}/tools \

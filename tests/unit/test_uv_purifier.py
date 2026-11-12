@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 """Unit tests of the lock tool (src/uv_purifier.py) and of the requirements
-split (nix/lib/split_requirements.py). They need no network.
+split (pkgs/build-uv-project/split_requirements.py). They need no network.
 
 Run from the repository root: python3 -m unittest discover -s tests/unit
 """
@@ -28,7 +28,7 @@ def load(name, path):
 
 
 uvp = load("uv_purifier", "src/uv_purifier.py")
-split = load("split_requirements", "nix/lib/split_requirements.py")
+split = load("split_requirements", "pkgs/build-uv-project/split_requirements.py")
 
 
 class ProjectPython(unittest.TestCase):

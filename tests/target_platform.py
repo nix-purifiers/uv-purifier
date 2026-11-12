@@ -59,10 +59,10 @@ def check(run, state, snapshot, target_expression, python, helper_uv, system, sh
         prefix = ('let f=builtins.getFlake ' + json.dumps('path:' + snapshot) +
                   '; p=f.inputs.nixpkgs.legacyPackages.' + system + '; t=(' + target_expression + '); ')
         for kind, expression in {
-            'package': prefix + 'b=p.callPackage (f.outPath+"/nix/lib/build-uv-project.nix") '
+            'package': prefix + 'b=p.callPackage (f.outPath+"/pkgs/build-uv-project/default.nix") '
                 '{purifier=import ' + shared + ' {inherit (p) lib;};}; in '
                 '(b {src=' + str(fixture) + ';python=t;}).interactive.drvPath',
-            'cli': prefix + 'in (import (f.outPath+"/nix/lib/cli.nix") {'
+            'cli': prefix + 'in (import (f.outPath+"/pkgs/cli/cli.nix") {'
                 'nixpkgs=f.inputs.nixpkgs.outPath;purifier=' + shared + ';src=' + json.dumps(str(fixture)) + ';'
                 'pythonVersion=t.pythonVersion;pythonInterpreter=t.interpreter;pythonGlibcVersion=' +
                 json.dumps(facts['libc']) + ';pythonFreeThreaded=' + json.dumps(facts['freeThreaded']) + ';}).drvPath',

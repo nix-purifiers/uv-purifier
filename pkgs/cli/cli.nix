@@ -80,7 +80,7 @@ let
     if lib.pathIsDirectory target then source target else target
   );
 
-  buildUvProject = pkgs.callPackage ./build-uv-project.nix (
+  buildUvProject = pkgs.callPackage ../build-uv-project/default.nix (
     {
       purifier = import purifier { inherit lib; };
     }
