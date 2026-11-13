@@ -57,6 +57,7 @@ def main(exported, direct_json, requirements_out, wheels_out):
         direct = json.load(f)
     by_name = {normalize(k): v for k, v in direct.get("names", {}).items()}
     by_path = {os.path.normpath(k): v for k, v in direct.get("paths", {}).items()}
+    editable_paths = {os.path.normpath(path) for path in direct.get("editablePaths", [])}
     with open(exported) as f:
         lines = f.read().splitlines()
     kept, wheels, missing = [], [], []
@@ -74,6 +75,10 @@ def main(exported, direct_json, requirements_out, wheels_out):
             url = urlsplit(path)
             if url.scheme == "file" and url.netloc in ("", "localhost"):
                 path = unquote(url.path)
+            if os.path.normpath(path) in editable_paths:
+                # Native prefetch installs this source through PEP 660.
+                # Its editable hook need not support building a release wheel.
+                continue
             wheel = by_path.get(os.path.normpath(path))
         if wheel is None:
             missing.append(requirement)

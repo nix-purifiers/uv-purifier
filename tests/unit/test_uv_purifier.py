@@ -10,6 +10,8 @@ import io
 import json
 import os
 import pathlib
+import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -31,7 +33,183 @@ uvp = load("uv_purifier", "src/uv_purifier.py")
 split = load("split_requirements", "pkgs/build-uv-project/split_requirements.py")
 
 
+class DynamicBuildHooks(unittest.TestCase):
+    def test_uv_backend_pins_keep_different_builds_separate(self):
+        captured = {
+            'builds': {'first==1': 0, 'second==1': 1},
+            'buildRequirements': [
+                {'packages': [{'name': 'uv-build', 'version': '0.12.24'}]},
+                {'packages': [{'name': 'uv-build', 'version': '0.13.5'}]},
+            ],
+        }
+        self.assertEqual(uvp.uv_build_pin(captured, 'first==1'), 'uv-build==0.12.24\n')
+        self.assertEqual(uvp.uv_build_pin(captured, 'second==1'), 'uv-build==0.13.5\n')
+        self.assertEqual(uvp.uv_build_pin(captured), '')
+        self.assertEqual(uvp.uv_build_pin(captured, 'other==1'), '')
+        captured['buildRequirements'].pop()
+        self.assertEqual(uvp.uv_build_pin(captured), 'uv-build==0.12.24\n')
+
+    def test_editable_classification_includes_directory_workspace_members(self):
+        for kind, name, expected in [
+            ('directory', 'member', True),
+            ('directory', 'dependency', False),
+            ('editable', 'dependency', True),
+            ('git', 'member', False),
+            ('virtual', 'member', False),
+        ]:
+            with self.subTest(kind=kind, name=name):
+                self.assertEqual(uvp.editable_source({
+                    'name': name, 'source': {kind: '.'},
+                }, {'member'}), expected)
+
+    def test_wheel_dependency_does_not_probe_editable_bootstrap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = pathlib.Path(directory)
+            (tree / 'backend.py').write_text('''
+def get_requires_for_build_wheel(config):
+    return ['fixture_dependency']
+def get_requires_for_build_editable(config):
+    import fixture_dependency
+    return ['editable_dependency']
+''')
+
+            def install(args, **kwargs):
+                if args[0] == 'venv':
+                    binary = pathlib.Path(args[-1]) / 'bin'
+                    binary.mkdir()
+                    (binary / 'python').symlink_to(sys.executable)
+                return subprocess.CompletedProcess(args, 0)
+
+            with mock.patch.object(uvp, 'run_uv', side_effect=install), \
+                    mock.patch.object(uvp, 'log') as log:
+                requirements = uvp.dynamic_requires(str(tree), {'build-system': {
+                    'build-backend': 'backend', 'backend-path': ['.'],
+                }}, ['static_dependency'], directory)
+            self.assertEqual(requirements, ['fixture_dependency'])
+            log.assert_not_called()
+
+    def test_editable_source_captures_editable_requirements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = pathlib.Path(directory)
+            (tree / 'backend.py').write_text('''
+def get_requires_for_build_wheel(config):
+    return ['wheel_dependency']
+def get_requires_for_build_editable(config):
+    return ['editable_dependency']
+''')
+
+            def install(args, **kwargs):
+                if args[0] == 'venv':
+                    binary = pathlib.Path(args[-1]) / 'bin'
+                    binary.mkdir()
+                    (binary / 'python').symlink_to(sys.executable)
+                return subprocess.CompletedProcess(args, 0)
+
+            with mock.patch.object(uvp, 'run_uv', side_effect=install):
+                requirements = uvp.dynamic_requires(str(tree), {'build-system': {
+                    'build-backend': 'backend', 'backend-path': ['.'],
+                }}, ['static_dependency'], directory, editable=True)
+            self.assertEqual(requirements, ['wheel_dependency', 'editable_dependency'])
+
+    def test_wheel_hook_failure_without_repair_requirements_is_fatal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tree = pathlib.Path(directory)
+            (tree / 'backend.py').write_text('''
+def get_requires_for_build_wheel(config):
+    raise RuntimeError('broken wheel hook')
+''')
+
+            def install(args, **kwargs):
+                if args[0] == 'venv':
+                    binary = pathlib.Path(args[-1]) / 'bin'
+                    binary.mkdir()
+                    (binary / 'python').symlink_to(sys.executable)
+                return subprocess.CompletedProcess(args, 0)
+
+            with mock.patch.object(uvp, 'run_uv', side_effect=install):
+                with self.assertRaisesRegex(uvp.Error, 'broken wheel hook'):
+                    uvp.dynamic_requires(str(tree), {'build-system': {
+                        'build-backend': 'backend', 'backend-path': ['.'],
+                    }}, ['static_dependency'], directory)
+
+
+class ScratchProjectVCS(unittest.TestCase):
+    def test_scratch_build_retains_tagged_version_without_copying_build_outputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory) / 'source'
+            root.mkdir()
+            (root / 'pyproject.toml').write_text('[project]\nname="dynamic"\ndynamic=["version"]\n')
+            subprocess.run(['git', 'init', '-q', root], check=True)
+            subprocess.run(['git', '-C', root, 'add', 'pyproject.toml'], check=True)
+            subprocess.run(['git', '-C', root, '-c', 'user.name=Fixture',
+                            '-c', 'user.email=fixture@example.invalid',
+                            'commit', '-qm', 'fixture'], check=True)
+            subprocess.run(['git', '-C', root, 'tag', 'v2.3.4'], check=True)
+            (root / '.venv').mkdir()
+            scratch = pathlib.Path(uvp.scratch_project(str(root), {'package': []}, directory))
+            version = subprocess.check_output(['git', '-C', scratch, 'describe', '--tags'], text=True).strip()
+            self.assertEqual(version, 'v2.3.4')
+            self.assertFalse((scratch / '.venv').exists())
+            (scratch / 'pyproject.toml').write_text('build writes stay in scratch')
+            self.assertIn('dynamic', (root / 'pyproject.toml').read_text())
+
+    def test_archive_without_repository_remains_buildable_scratch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory) / 'source'
+            root.mkdir()
+            (root / 'pyproject.toml').write_text('[project]\nname="static"\nversion="1"\n')
+            with mock.patch.object(uvp.subprocess, 'run', return_value=mock.Mock(returncode=128)):
+                scratch = pathlib.Path(uvp.scratch_project(str(root), {'package': []}, directory))
+            self.assertFalse((scratch / '.git').exists())
+            self.assertEqual((scratch / 'pyproject.toml').read_bytes(), (root / 'pyproject.toml').read_bytes())
+
+
 class ProjectPython(unittest.TestCase):
+    def test_direct_sources_and_editables_respect_markers_without_losing_hashes(self):
+        lines = ['# frozen export', 'attrs==25.3.0 \\', '    --hash=sha256:abc',
+                 'windows-only @ https://example.org/package.whl ; sys_platform == "win32"',
+                 '-e ../windows-source ; sys_platform == "win32"',
+                 'file:///local/source ; python_version < "3.13"',
+                 'linux-only @ git+https://example.org/repo ; sys_platform == "linux"']
+        active = '\n'.join(line for block in uvp.active_requirement_blocks(lines,
+                           {'sys_platform': 'linux', 'python_version': '3.12'}) for line in block)
+        self.assertIn('--hash=sha256:abc', active)
+        self.assertNotIn('windows-only', active)
+        self.assertNotIn('windows-source', active)
+        self.assertIn('file:///local/source', active)
+        self.assertIn('linux-only @ git+', active)
+
+    def test_frozen_registry_selection_uses_target_markers_and_requested_groups(self):
+        text = ('requests==2.32.5 \\\n    --hash=sha256:abc\n'
+                'pywin32==311 ; sys_platform == "win32"\n'
+                'typing-extensions==4.15.0 ; python_version < "3.13"\n')
+        def exported(arguments, cwd, env):
+            pathlib.Path(arguments[arguments.index('--output-file') + 1]).write_text(text)
+            return mock.Mock(returncode=0)
+        for system, version, expected in (
+            ('linux', '3.12', ['requests==2.32.5', 'typing-extensions==4.15.0']),
+            ('win32', '3.12', ['pywin32==311', 'requests==2.32.5', 'typing-extensions==4.15.0']),
+            ('linux', '3.14', ['requests==2.32.5']),
+        ):
+            with self.subTest(system=system, version=version), \
+                    mock.patch.object(uvp, 'run_helper_uv', side_effect=exported) as export:
+                actual = uvp.active_registry_packages('/project',
+                    {'executable': '/target/python', 'markers': {'sys_platform': system, 'python_version': version}}, ['--group', 'test'])
+                self.assertEqual(actual, expected)
+                self.assertIn('--frozen', export.call_args.args[0])
+                self.assertIn('--group', export.call_args.args[0])
+
+    def test_resolved_project_runtime_is_pinned_and_caller_environment_restored(self):
+        for previous in (None, '3.8'):
+            environment = {} if previous is None else {'UV_PYTHON': previous}
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(uvp, 'project_python', return_value='/opt/user-sdk/bin/python'):
+                with self.assertRaisesRegex(RuntimeError, 'backend failed'):
+                    with uvp.project_runtime('/project'):
+                        self.assertEqual(os.environ['UV_PYTHON'], '/opt/user-sdk/bin/python')
+                        raise RuntimeError('backend failed')
+                self.assertEqual(os.environ.get('UV_PYTHON'), previous)
+
     def test_native_resolver_and_helper_frontend_are_selected_independently(self):
         with mock.patch.dict(os.environ, {'UV_PURIFIER_HELPER_UV': '/helper/uv'}), mock.patch.object(
             uvp.subprocess, 'run', return_value=mock.Mock(returncode=0)
@@ -45,7 +223,6 @@ class ProjectPython(unittest.TestCase):
         for executable, free_threaded in (
             ('/nix/store/target-python/bin/python3.8', False),
             ('/nix/store/target-python/bin/python3.14t', True),
-            ('/usr/bin/python3.8', False),
         ):
             with self.subTest(executable=executable), mock.patch.dict(os.environ, {
                 'UV_PURIFIER_NIX_LIB': '/library', 'UV_PURIFIER_NIXPKGS': '/nixpkgs',
@@ -61,6 +238,23 @@ class ProjectPython(unittest.TestCase):
                     self.assertEqual(command[command.index('pythonInterpreter') + 1], executable)
                     self.assertEqual(command[command.index('pythonGlibcVersion') + 1], '2.38')
                     self.assertEqual(command[command.index('pythonFreeThreaded') + 1], 'true' if free_threaded else 'false')
+
+    def test_local_inputs_preserve_a_host_sdk_and_actual_tags(self):
+        identity = {'version': '3.8', 'executable': '/opt/user-sdk/bin/python',
+                    'freeThreaded': False, 'glibc': '2.28'}
+        with mock.patch.dict(os.environ, {'UV_PURIFIER_NIX_LIB': '/library',
+                'UV_PURIFIER_NIXPKGS': '/nixpkgs', 'UV_PURIFIER_LIBRARY': '/purifier'}), \
+                mock.patch.object(uvp, 'target_wheel_tags', return_value=['cp38-cp38-manylinux_2_28_x86_64']), \
+                mock.patch.object(uvp.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout='/nix/store/inputs\n')) as build:
+            self.assertEqual(uvp.nix_build('/project', '/project/uv-purifier.lock.json',
+                             local=True, selected_python=identity, active_packages=[]), '/nix/store/inputs')
+            command = build.call_args.args[0]
+            self.assertEqual(command[command.index('pythonInterpreter') + 1], identity['executable'])
+            self.assertEqual(command[command.index('localInputs') + 1], 'true')
+            self.assertIn('pythonActivePackages', command)
+            self.assertIn('cp38-cp38-manylinux_2_28_x86_64', command[command.index('pythonWheelTags') + 1])
+            with self.assertRaisesRegex(uvp.Error, 'sandboxed release'):
+                uvp.nix_build('/project', '/project/uv-purifier.lock.json', package='project', selected_python=identity)
 
     def test_explicit_target_is_passed_to_python_find(self):
         with mock.patch.dict(os.environ, {"UV_PYTHON": "/fixture/python"}), mock.patch.object(
@@ -93,6 +287,8 @@ class FileNames(unittest.TestCase):
         self.assertEqual(uvp.entry_name({"filename": "pkg-1.0.tar.gz"}), "pkg-1.0.tar.gz")
         with self.assertRaises(uvp.Error):
             uvp.entry_name({"hash": "sha256:00"})
+
+
 
 
 class Hashes(unittest.TestCase):
@@ -425,6 +621,15 @@ class SplitRequirements(unittest.TestCase):
         self.assertEqual(kept.strip(), "")
         self.assertEqual(wheels, ["/w/library"])
 
+    def test_explicit_editable_source_needs_no_release_wheel(self):
+        kept, wheels = self.run_split(
+            {"editablePaths": ["../sdk-runtime"]},
+            "-e ../sdk-runtime\nrequests==2.32.5 --hash=sha256:abc\n",
+        )
+        self.assertNotIn('sdk-runtime', kept)
+        self.assertIn('requests==2.32.5', kept)
+        self.assertEqual(wheels, [])
+
     def test_a_requirement_without_a_wheel_is_an_error(self):
         with self.assertRaises(SystemExit) as raised:
             self.run_split({"names": {"attrs": "/w/attrs"}, "paths": {}})
@@ -439,7 +644,8 @@ class InputRemoval(unittest.TestCase):
     def test_cli_explicitly_clears_inputs_for_lock_and_update(self):
         for operation in ('lock', 'update'):
             with self.subTest(operation=operation), tempfile.TemporaryDirectory() as root:
-                with mock.patch.object(uvp, operation) as invoke:
+                with mock.patch.object(uvp, operation) as invoke, \
+                        mock.patch.object(uvp, 'project_python', return_value='/fixture/python'):
                     self.assertEqual(uvp.main([operation, '--project', root, '--no-inputs']), 0)
                     self.assertEqual(invoke.call_args.kwargs.get('inputs',
                         invoke.call_args.args[-1] if operation == 'update' else None), [])

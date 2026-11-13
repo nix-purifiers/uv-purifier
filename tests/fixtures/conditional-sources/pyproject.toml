@@ -1,0 +1,16 @@
+[project]
+name = "conditional-sources"
+version = "1"
+requires-python = ">=3.12"
+dependencies = [
+  "active-direct; sys_platform == 'linux' and python_version >= '3.12'",
+  "active-editable; sys_platform == 'linux' and python_version >= '3.12'",
+  "windows-direct; sys_platform == 'win32'",
+  "windows-editable; sys_platform == 'win32'",
+]
+
+[tool.uv.sources]
+active-direct = { path = "active" }
+active-editable = { path = "active-editable", editable = true }
+windows-direct = { path = "windows-direct" }
+windows-editable = { path = "windows-editable", editable = true }

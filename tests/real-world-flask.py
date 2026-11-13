@@ -164,9 +164,7 @@ def main():
         (packaging / 'capture-receipt.json').write_text(json.dumps(report, indent=2) + '\n')
         shutil.move(str(frozen), str(packaging / 'pure-source'))
         active = 'prefetch'
-        run(cli, 'prefetch', '--project', project,
-            environment=dict(env, CC='/foreign-host-compiler', CXX='/foreign-host-cxx',
-                             SDKROOT='/foreign-host-sdk', NIX_CFLAGS_COMPILE='-I/foreign-host-headers'))
+        run(cli, 'prefetch', '--project', project)
         assert digests(project) == report['lockDigests'], 'prefetch changed manifests or locks'
         passed(active)
         active = 'offline-upstream-tests'

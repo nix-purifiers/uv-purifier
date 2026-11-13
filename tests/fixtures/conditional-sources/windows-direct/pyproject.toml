@@ -1,0 +1,9 @@
+[project]
+name = "windows-direct"
+version = "1"
+requires-python = ">=3.12"
+
+[build-system]
+requires = []
+build-backend = "_backend"
+backend-path = ["."]

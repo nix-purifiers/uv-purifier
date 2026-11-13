@@ -56,6 +56,7 @@ pkgs.runCommand "uv-purifier-test-flask"
     cp ${./uv-purifier.lock.json} flask/uv-purifier.lock.json
     cd flask
     export HOME=$TMPDIR UV_CACHE_DIR=$TMPDIR/uv-cache PYTHONDONTWRITEBYTECODE=1
+    export UV_PYTHON=${project.interactive}/python
     uv-purifier prefetch --inputs ${project.interactive}
     UV_OFFLINE=1 uv run --no-sync pytest -q -p no:cacheprovider
     touch $out

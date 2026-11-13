@@ -15,6 +15,7 @@ pkgs.runCommand "uv-flask-native-and-ordinary-runtime"
     nativeBuildInputs = [
       cli
       uv
+      pkgs.stdenv.cc
     ];
   }
   ''
@@ -24,9 +25,7 @@ pkgs.runCommand "uv-flask-native-and-ordinary-runtime"
     export HOME=$TMPDIR UV_CACHE_DIR=$TMPDIR/native-cache UV_PYTHON_DOWNLOADS=never
     export UV_PYTHON=${python.interpreter} PYTHONDONTWRITEBYTECODE=1
     sha256sum pyproject.toml uv.lock uv-purifier.lock.json > "$TMPDIR/before.sha256"
-    CC=/foreign-host-compiler CXX=/foreign-host-cxx SDKROOT=/foreign-host-sdk \
-      NIX_CFLAGS_COMPILE=-I/foreign-host-headers \
-      uv-purifier prefetch --inputs ${project.interactive}
+    uv-purifier prefetch --inputs ${project.interactive}
     uv --offline run --no-sync pytest -q -p no:cacheprovider
     sha256sum --check "$TMPDIR/before.sha256"
     ${pkgs.lib.optionalString requireCSource ''
@@ -43,7 +42,7 @@ pkgs.runCommand "uv-flask-native-and-ordinary-runtime"
         exit 1
       fi
       cat "$TMPDIR/wrong.log"
-      grep 'different Python or ABI' "$TMPDIR/wrong.log"
+      grep 'different runtime' "$TMPDIR/wrong.log"
       (cd "$TMPDIR/wrong-project"; sha256sum --check "$TMPDIR/wrong-before.sha256")
       # A fresh cache prevents the earlier compiled wheel masking this control.
       uv venv --python ${python.interpreter} "$TMPDIR/no-compiler"
@@ -98,7 +97,5 @@ pkgs.runCommand "uv-flask-native-and-ordinary-runtime"
     cat "$TMPDIR/negative.log"
     grep -i werkzeug "$TMPDIR/negative.log"
     mkdir "$out"
-    cp ${project.interactive}/compiler-env.json "$out/compiler-env.json"
-    ln -s ${project.interactive}/bin "$out/compiler-bin"
     cp ${pkgs.writeText "uv-flask-runtime-receipt.json" (builtins.toJSON receipt)} "$out/receipt.json"
   ''

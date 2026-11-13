@@ -23,6 +23,9 @@
   pythonFreeThreaded ? false,
   nativeUvPackage ? null,
   uvHelperPackage ? null,
+  localInputs ? false,
+  pythonWheelTags ? null,
+  pythonActivePackages ? null,
 }:
 let
   pkgs = import nixpkgs { };
@@ -94,11 +97,17 @@ let
       python =
         if pythonInterpreter != null then
           {
-            interpreter = builtins.storePath pythonInterpreter;
+            interpreter =
+              if localInputs && !(lib.hasPrefix "/nix/store/" pythonInterpreter) then
+                pythonInterpreter
+              else
+                builtins.storePath pythonInterpreter;
             inherit pythonVersion;
             freeThreaded = pythonFreeThreaded;
           }
           // lib.optionalAttrs (pythonGlibcVersion != null) { glibcVersion = pythonGlibcVersion; }
+          // lib.optionalAttrs (pythonWheelTags != null) { wheelTags = pythonWheelTags; }
+          // lib.optionalAttrs (pythonActivePackages != null) { activePackages = pythonActivePackages; }
         else if pythonVersion == null then
           pkgs.python3
         else
@@ -109,7 +118,14 @@ let
     // lib.optionalAttrs (lockFile != null) { lockFile = /. + lockFile; }
   );
 in
-if package == null then
+if
+  localInputs
+  && (pythonInterpreter == null || pythonWheelTags == null || pythonActivePackages == null)
+then
+  throw "uv-purifier: local inputs require the selected runtime's interpreter, wheel tags and frozen active package graph"
+else if localInputs then
+  project.nativeInputs
+else if package == null then
   project.interactive
 else if inputRecords != [ ] && project.packages ? ${package} then
   project.packages.${package}.projections.python

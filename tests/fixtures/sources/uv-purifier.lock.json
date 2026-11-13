@@ -162,20 +162,11 @@
   "buildRequirements": [
     {
       "requires": [
-        "editables~=0.3",
         "hatch-fancy-pypi-readme>=23.2.0",
         "hatch-vcs",
         "hatchling"
       ],
       "packages": [
-        {
-          "name": "editables",
-          "version": "0.6",
-          "wheels": [
-            "editables-0.6-py3-none-any.whl"
-          ],
-          "sdist": "editables-0.6.tar.gz"
-        },
         {
           "name": "hatch-fancy-pypi-readme",
           "version": "25.1.0",
@@ -268,18 +259,9 @@
     },
     {
       "requires": [
-        "editables~=0.3",
         "hatchling"
       ],
       "packages": [
-        {
-          "name": "editables",
-          "version": "0.6",
-          "wheels": [
-            "editables-0.6-py3-none-any.whl"
-          ],
-          "sdist": "editables-0.6.tar.gz"
-        },
         {
           "name": "hatchling",
           "version": "1.33.0",
@@ -359,6 +341,70 @@
           "sdist": "setuptools-84.2.1.tar.gz"
         }
       ]
+    },
+    {
+      "requires": [
+        "editables~=0.3",
+        "hatchling"
+      ],
+      "packages": [
+        {
+          "name": "editables",
+          "version": "0.6",
+          "wheels": [
+            "editables-0.6-py3-none-any.whl"
+          ],
+          "sdist": "editables-0.6.tar.gz"
+        },
+        {
+          "name": "hatchling",
+          "version": "1.33.0",
+          "wheels": [
+            "hatchling-1.33.0-py3-none-any.whl"
+          ],
+          "sdist": "hatchling-1.33.0.tar.gz"
+        },
+        {
+          "name": "packaging",
+          "version": "26.3",
+          "wheels": [
+            "packaging-26.3-py3-none-any.whl"
+          ],
+          "sdist": "packaging-26.3.tar.gz"
+        },
+        {
+          "name": "pathspec",
+          "version": "1.1.1",
+          "wheels": [
+            "pathspec-1.1.1-py3-none-any.whl"
+          ],
+          "sdist": "pathspec-1.1.1.tar.gz"
+        },
+        {
+          "name": "pluggy",
+          "version": "1.7.0",
+          "wheels": [
+            "pluggy-1.7.0-py3-none-any.whl"
+          ],
+          "sdist": "pluggy-1.7.0.tar.gz"
+        },
+        {
+          "name": "tomlkit",
+          "version": "0.15.2",
+          "wheels": [
+            "tomlkit-0.15.2-py3-none-any.whl"
+          ],
+          "sdist": "tomlkit-0.15.2.tar.gz"
+        },
+        {
+          "name": "trove-classifiers",
+          "version": "2026.9.21.13",
+          "wheels": [
+            "trove_classifiers-2026.9.21.13-py3-none-any.whl"
+          ],
+          "sdist": "trove_classifiers-2026.9.21.13.tar.gz"
+        }
+      ]
     }
   ],
   "builds": {
@@ -366,11 +412,11 @@
     "localdir==0.3.0": 1,
     "localsdist==0.4.0": 2,
     "six==1.17.0": 3,
-    "sources==0.1.0": 1
+    "sources==0.1.0": 4
   },
   "sources": {
     "attrs==25.3.0": "git/attrs-3dca08ce5bbe673d7df25f44f3dda92505d1043d"
   },
   "outputs": {},
-  "contentHash": "2259d758c7ea48ae96f602e7843d74695cb8ce3892643b81206fb40536f15d4d"
+  "contentHash": "f402b6c607750e4b9c6a01c2d4315bdd563e854e8c0b20b2dc779f8d54448f9e"
 }

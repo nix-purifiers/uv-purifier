@@ -110,6 +110,7 @@ let
         # seconds and the size of the source, so the edit right after the
         # first run would go unseen through a cache.
         export HOME=$TMPDIR UV_CACHE_DIR=$TMPDIR/uv-cache PYTHONDONTWRITEBYTECODE=1
+        export UV_PYTHON=${project.interactive}/python
         uv-purifier prefetch --inputs ${project.interactive}
         check() {
           output=$(.venv/bin/${script})
@@ -343,7 +344,10 @@ in
             ./fixtures/simple
           ];
         };
-        nativeBuildInputs = [ pkgs.python3 ];
+        nativeBuildInputs = [
+          (pkgs.python3.withPackages (ps: [ ps.packaging ]))
+          pkgs.git
+        ];
       }
       ''
         cd $src
@@ -395,4 +399,7 @@ in
     ${lib.getExe cli} publish --help
     touch $out
   '';
+}
+// lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+  native-runtime = import ./native-runtime.nix { inherit pkgs; };
 }

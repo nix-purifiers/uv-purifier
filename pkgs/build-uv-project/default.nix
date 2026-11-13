@@ -37,6 +37,8 @@
 {
   lib,
   stdenv,
+  patchelf,
+  zlib,
   linkFarm,
   runCommand,
   writeText,
@@ -85,6 +87,20 @@ in
   # Native commands needed by tests, independently of Python dependencies
   # selected by the project's native uv lock and dependency groups.
   nativeCheckInputs ? [ ],
+  # Native tools required by PEP 517 source builds, such as Rust or C
+  # compilers. Python build requirements remain selected by the lock.
+  nativeBuildInputs ? [ ],
+  # Additional locked dependency groups used by the development/test
+  # environment, matching `uv-purifier prefetch --group`.
+  dependencyGroups ? [ ],
+  # Native uv group/extra selection for development and tests only.
+  developmentSelection ? { },
+  # Standard manylinux wheels may depend on compiler runtime libraries
+  # supplied by the host distribution rather than bundled in the wheel.
+  runtimeLibraries ? lib.optionals stdenv.hostPlatform.isLinux [
+    stdenv.cc.cc.lib
+    zlib
+  ],
 }:
 let
   inherit (builtins)
@@ -221,7 +237,30 @@ let
         glibcVersion = python.glibcVersion or (python.stdenv.cc.libc.version or glibc.version);
       }
   );
-  installs = purifier.wheels wheelTarget;
+  # Local adoption probes the user's interpreter through the existing tag
+  # worker. These are its actual ABI/platform tags, not a nixpkgs SDK choice.
+  installs =
+    if python ? wheelTags then
+      let
+        compatible = lib.genAttrs python.wheelTags (_: true);
+      in
+      name:
+      let
+        parts = lib.splitString "-" (lib.removeSuffix ".whl" name);
+        count = builtins.length parts;
+      in
+      count >= 5
+      && lib.any (
+        implementation:
+        lib.any (
+          abi:
+          lib.any (platform: compatible ? ${implementation + "-" + abi + "-" + platform}) (
+            lib.splitString "." (elemAt parts (count - 1))
+          )
+        ) (lib.splitString "." (elemAt parts (count - 2)))
+      ) (lib.splitString "." (elemAt parts (count - 3)))
+    else
+      purifier.wheels wheelTarget;
 
   # What installing a locked distribution needs on this system: its wheels
   # that install, or else its sdist and a build of it.
@@ -323,13 +362,48 @@ let
   };
   uvSetup = ''
     export HOME=$TMPDIR UV_CACHE_DIR=$TMPDIR/uv-cache
+    export CARGO_BUILD_JOBS=$NIX_BUILD_CORES
+  '';
+  prepareRuntime = lib.optionalString platform.isLinux ''
+    ${python3.interpreter} -I ${./prepare-runtime.py} "$out" \
+      --patchelf ${patchelf}/bin/patchelf \
+      --interpreter "$(${patchelf}/bin/patchelf --print-interpreter ${python.interpreter})" \
+      ${lib.escapeShellArgs (
+        lib.concatMap (library: [
+          "--library-dir"
+          "${lib.getLib library}/lib"
+        ]) runtimeLibraries
+      )}
   '';
   # `uv build --out-dir` also writes a .gitignore into the directory, which
   # is no distribution.
-  uvBuild = args: ''
-    ${uv}/bin/uv build ${args} --out-dir $out
-    rm -f $out/.gitignore
-  '';
+  uvBuild =
+    key: args:
+    let
+      packages = (requirementSet key).packages;
+      backend = filter (package: package.name == "uv-build") packages;
+      constraints = writeText "uv-build-constraints.txt" (
+        lib.concatMapStrings (package: "uv-build==${package.version}\n") backend
+      );
+    in
+    ''
+      ${lib.optionalString (backend != [ ]) ''
+        backendEnv="$TMPDIR/uv-backend"
+        ${uv}/bin/uv venv --no-python-downloads --python ${python.interpreter} "$backendEnv"
+        ${uv}/bin/uv pip install --python "$backendEnv/bin/python" --no-deps \
+          ${lib.escapeShellArgs (map (package: "${package.name}==${package.version}") packages)}
+        (
+          out="$backendEnv"
+          ${prepareRuntime}
+        )
+      ''}
+      ${uv}/bin/uv build --force-pep517 ${
+        lib.optionalString (
+          backend != [ ]
+        ) ''--no-build-isolation --python "$backendEnv/bin/python" --build-constraints ${constraints}''
+      } ${args} --out-dir $out
+      rm -f $out/.gitignore
+    '';
 
   membersByName = listToAttrs (
     map (m: {
@@ -338,7 +412,15 @@ let
     }) lock.members
   );
 
-  memberVersion = m: lib.removePrefix "${m.name}==" m.key;
+  memberVersion =
+    m:
+    let
+      version = lib.removePrefix "${m.name}==" m.key;
+    in
+    if m.kind == "virtual" then
+      (if version == "" then "0" else version)
+    else
+      builtins.elemAt (lib.splitString "-" (outputsOf m).wheel) 1;
 
   # A local path of uv.lock, as a Nix path.
   localPath =
@@ -386,7 +468,8 @@ let
             nativeBuildInputs = [
               uv
               unzip
-            ];
+            ]
+            ++ nativeBuildInputs;
             # A project that reads its version from git, through
             # setuptools-scm or hatch-vcs, finds no repository in the
             # checkout and takes the version uv.lock records.
@@ -397,7 +480,7 @@ let
             buildPhase = ''
               runHook preBuild
               ${uvSetup}
-              ${uvBuild "--wheel ."}
+              ${uvBuild d.key "--wheel ."}
               runHook postBuild
             '';
             dontInstall = true;
@@ -415,13 +498,13 @@ let
         pname = "${distribution.name}-runtime-wheel";
         version = lib.removePrefix "${distribution.name}==" distribution.key;
         src = fetch systemFiles.${distribution.sdist};
-        nativeBuildInputs = [ uv ];
+        nativeBuildInputs = [ uv ] ++ nativeBuildInputs;
         env = uvEnv;
         dontConfigure = true;
         buildPhase = ''
           runHook preBuild
           ${uvSetup}
-          ${uvBuild "--wheel ."}
+          ${uvBuild distribution.key "--wheel ."}
           runHook postBuild
         '';
         dontInstall = true;
@@ -434,22 +517,36 @@ let
   # exported requirements file for their wheels: each package from git or a
   # URL by its name, and each local package by its path.
   directIndex = if hasInputs then "${buildSrc}/.uv-purifier-inputs/direct.json" else directIndexBase;
-  directIndexBase = writeText "uv-purifier-direct.json" (
-    builtins.toJSON {
-      names = listToAttrs (
-        map (d: {
-          inherit (d) name;
-          value = "${directWheels.${d.name}}";
-        }) (filter (d: !(isProvided d) && (d.kind == "git" || d.kind == "url")) lock.direct)
-      );
-      paths = listToAttrs (
-        map (d: {
-          name = if lib.hasPrefix "/" d.value || lib.hasPrefix "." d.value then d.value else "./${d.value}";
-          value = "${directWheels.${d.name}}";
-        }) (filter (d: !(isProvided d) && d.kind != "git" && d.kind != "url") lock.direct)
-      );
-    }
-  );
+  directIndexBase = makeDirectIndex false;
+  interactiveDirectIndex = if hasInputs then directIndex else makeDirectIndex true;
+  makeDirectIndex =
+    editableSources:
+    writeText "uv-purifier-direct.json" (
+      builtins.toJSON {
+        editablePaths = map (d: d.value) (
+          filter (d: editableSources && !(isProvided d) && d.kind == "editable") lock.direct
+        );
+        names = listToAttrs (
+          map (d: {
+            inherit (d) name;
+            value = "${directWheels.${d.name}}";
+          }) (filter (d: !(isProvided d) && (d.kind == "git" || d.kind == "url")) lock.direct)
+        );
+        paths = listToAttrs (
+          map
+            (d: {
+              name = if lib.hasPrefix "/" d.value || lib.hasPrefix "." d.value then d.value else "./${d.value}";
+              value = "${directWheels.${d.name}}";
+            })
+            (
+              filter (
+                d:
+                !(isProvided d) && d.kind != "git" && d.kind != "url" && (!editableSources || d.kind != "editable")
+              ) lock.direct
+            )
+        );
+      }
+    );
 
   # What a member's build produces, from the lock in memory.
   outputsOf = m: locked.outputs.${m.name};
@@ -488,8 +585,12 @@ let
         pname = "${m.name}-distributions";
         version = memberVersion m;
         src = buildSrc;
-        nativeBuildInputs = [ uv ];
-        env = uvEnv;
+        nativeBuildInputs = [ uv ] ++ nativeBuildInputs;
+        env = uvEnv // {
+          # A source snapshot has no Git metadata. Use the native version
+          # captured in this member's wheel, including dynamic uv projects.
+          SETUPTOOLS_SCM_PRETEND_VERSION = memberVersion m;
+        };
         dontConfigure = true;
         buildPhase = ''
           runHook preBuild
@@ -498,7 +599,7 @@ let
             cp ${src}/pyproject.toml pyproject.toml
             rm -rf .uv-purifier-inputs
           ''}
-          ${uvBuild "--package ${lib.escapeShellArg m.name}"}
+          ${uvBuild m.key "--package ${lib.escapeShellArg m.name}"}
           for file in ${lib.escapeShellArgs (distributionFiles m)}; do
             if [ ! -f "$out/$file" ]; then
               echo "uv-purifier: the build of ${m.name} made $(ls $out), not $file as uv-purifier.lock.json records. Run \`uv-purifier lock\`." >&2
@@ -537,13 +638,17 @@ let
     ${python3.interpreter} -I ${./split_requirements.py} "$TMPDIR/exported.txt" ${directIndex} \
       "$TMPDIR/requirements.txt" "$TMPDIR/direct-wheels.txt"
     uv venv --no-python-downloads --python ${python.interpreter} "$out"
-    uv --no-config pip install --offline --no-index --find-links ${wheelhouse} --python "$out/bin/python" --require-hashes -r "$TMPDIR/requirements.txt"
+    # uv export already contains the complete locked graph. Resolve no
+    # transitive dependencies here: registry packages can depend on a git
+    # package whose locked wheel is installed in the following phase.
+    uv --no-config pip install --offline --no-index --find-links ${wheelhouse} --python "$out/bin/python" --no-deps --require-hashes -r "$TMPDIR/requirements.txt"
     while read -r wheels; do
       uv --no-config pip install --offline --no-index --python "$out/bin/python" --no-deps "$wheels"/*.whl
     done < "$TMPDIR/direct-wheels.txt"
     ${lib.concatMapStrings (name: ''
       uv --no-config pip install --offline --no-index --python "$out/bin/python" --no-deps ${distributions.${name}}/*.whl
     '') (filter (name: distributions ? ${name}) members)}
+    ${prepareRuntime}
   '';
 
   publicationSources =
@@ -585,7 +690,7 @@ let
         pname = m.name;
         version = memberVersion m;
         src = buildSrc;
-        nativeBuildInputs = [ nativeUv ];
+        nativeBuildInputs = [ nativeUv ] ++ nativeBuildInputs;
         env = uvEnv;
         dontConfigure = true;
         buildPhase = ''
@@ -616,6 +721,9 @@ let
           done
         '';
         dontInstall = true;
+        # Installation already prepares runtime paths and RECORD hashes.
+        # A later shrink/strip pass changes wheel bytes and loader semantics.
+        dontFixup = true;
       });
     }) lock.members
   );
@@ -626,21 +734,49 @@ let
     in
     if roots != [ ] then (lib.head roots).name else "uv-project";
 
-  # Every member with the default dependency groups, as `uv sync` installs
+  developmentArgs =
+    (
+      {
+        groups ? [ ],
+        allGroups ? false,
+        excludeGroups ? [ ],
+        extras ? [ ],
+        allExtras ? false,
+      }:
+      [ "--all-packages" ]
+      ++ lib.optionals allGroups [ "--all-groups" ]
+      ++ concatMap (group: [
+        "--group"
+        group
+      ]) (dependencyGroups ++ groups)
+      ++ concatMap (group: [
+        "--no-group"
+        group
+      ]) excludeGroups
+      ++ lib.optionals allExtras [ "--all-extras" ]
+      ++ concatMap (extra: [
+        "--extra"
+        extra
+      ]) extras
+    )
+      developmentSelection;
+
+  # Every member with the selected dependency groups, as `uv sync` installs
   # a project for development.
   development = stdenv.mkDerivation {
     pname = "${projectName}-development";
     version = "0";
     src = buildSrc;
-    nativeBuildInputs = [ nativeUv ];
+    nativeBuildInputs = [ nativeUv ] ++ nativeBuildInputs;
     env = uvEnv;
     dontConfigure = true;
     buildPhase = ''
       runHook preBuild
-      ${installEnvironment "--all-packages" (map (m: m.name) builtMembers)}
+      ${installEnvironment (lib.escapeShellArgs developmentArgs) (map (m: m.name) builtMembers)}
       runHook postBuild
     '';
     dontInstall = true;
+    dontFixup = true;
   };
 
   tests = runCommand "${projectName}-tests" { nativeBuildInputs = nativeCheckInputs; } ''
@@ -681,39 +817,146 @@ let
   # needed only on some systems.
   fetches = locked.entries;
 
+  # Fetch-only local inputs. No project interpreter or dependency wheel is
+  # built in Nix; native uv installs/builds these with the user's runtime.
+  nativeDirect = filter (d: !(isProvided d) && d.kind != "editable") lock.direct;
+  nativeDependencyNeeds = map needs (
+    filter (
+      d: !(python ? activePackages) || builtins.elem d.key python.activePackages
+    ) lock.distributions
+  );
+  nativeBuilds = buildClosure (
+    map (m: m.key) builtMembers
+    ++ map (d: d.key) builtDirect
+    ++ concatMap (n: n.builds) nativeDependencyNeeds
+  );
+  nativeFileNames = lib.unique (
+    concatMap (n: n.files) nativeDependencyNeeds
+    ++ concatMap (key: concatMap (n: n.files) (requirementNeeds key)) nativeBuilds
+  );
+  nativeWheelhouse = purifier.tree (
+    fetchArgs
+    // {
+      name = "uv-native-wheelhouse";
+      entries = map (
+        name:
+        systemFiles.${name} or (throw "uv-purifier: no locked download of ${name} for ${platform.system}")
+      ) nativeFileNames;
+    }
+  );
+  nativeDirectSource =
+    d:
+    if d.wheel != null then
+      if d.wheel.url != null then fetch (fileEntry d.wheel.url d.wheel.hash) else localPath d.value
+    else
+      directSource d;
+  nativeDirectIndex = writeText "uv-native-direct.json" (
+    builtins.toJSON {
+      editablePaths = map (d: d.value) (filter (d: !(isProvided d) && d.kind == "editable") lock.direct);
+      names = listToAttrs (
+        map (d: {
+          inherit (d) name;
+          value = toString (nativeDirectSource d);
+        }) (filter (d: d.kind == "git" || d.kind == "url") nativeDirect)
+      );
+      paths = listToAttrs (
+        map (d: {
+          name = if lib.hasPrefix "/" d.value || lib.hasPrefix "." d.value then d.value else "./${d.value}";
+          value = toString (nativeDirectSource d);
+        }) (filter (d: d.kind != "git" && d.kind != "url") nativeDirect)
+      );
+    }
+  );
+  nativeSources = writeText "uv-native-sources.json" (
+    builtins.toJSON (
+      map (d: {
+        source = toString (nativeDirectSource d);
+        inherit (d) version key;
+        filename = if d.wheel != null then d.wheel.name else null;
+      }) nativeDirect
+    )
+  );
+  nativeInputs = runCommand "uv-purifier-native-inputs" { } ''
+    mkdir "$out"
+    ln -s ${nativeWheelhouse} "$out/wheelhouse"
+    ln -s ${nativeDirectIndex} "$out/direct.json"
+    ln -s ${nativeSources} "$out/native-sources.json"
+    ln -s ${./split_requirements.py} "$out/split_requirements.py"
+    ${lib.optionalString (platform.isLinux && lib.hasPrefix "/nix/store/" (toString python.interpreter))
+      ''
+        cat > "$out/prepare-runtime" <<'EOF'
+        #!${stdenv.shell}
+        exec ${python3.interpreter} -I ${./prepare-runtime.py} "$1" \
+          --patchelf ${patchelf}/bin/patchelf \
+          --interpreter "$(${patchelf}/bin/patchelf --print-interpreter ${python.interpreter})" \
+          ${lib.escapeShellArgs (
+            lib.concatMap (library: [
+              "--library-dir"
+              "${lib.getLib library}/lib"
+            ]) runtimeLibraries
+          )}
+        EOF
+        chmod +x "$out/prepare-runtime"
+      ''
+    }
+    ln -s ${
+      writeText "uv-editable-versions.json" (
+        builtins.toJSON (
+          lib.listToAttrs (
+            map (m: {
+              name = m.path;
+              value = memberVersion m;
+            }) builtMembers
+          )
+        )
+      )
+    } "$out/editable-versions.json"
+    ${lib.optionalString hasInputs ''
+      ln -s ${inputViews} "$out/input-views.json"
+      ln -s ${oldRepositoryFile} "$out/old-repositories.json"
+      ln -s ${./python_inputs.py} "$out/python-inputs.py"
+      ln -s ${purifier.projectInputsTool} "$out/project-inputs-tools"
+    ''}
+  '';
+
   # What `uv-purifier prefetch` installs the project's .venv from: the
   # Python of the build, the wheelhouse, and the wheels of the direct
   # packages with the index that split_requirements.py reads.
-  interactive =
-    runCommand "uv-purifier-interactive"
-      {
-        nativeBuildInputs = [
-          stdenv.cc
-        ];
-      }
-      ''
-        mkdir $out
-        ln -s ${stdenv.cc}/bin $out/bin
-        ${python3.interpreter} -I - "$out/compiler-env.json" <<'PYTHON'
-        import json, os, sys
-        # Retain compiler/SDK setup, never sandbox paths or the whole build env.
-        names = ("CC", "CXX", "AR", "AS", "LD", "NM", "RANLIB", "STRIP",
-                 "SDKROOT", "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "NIX_CFLAGS_COMPILE",
-                 "NIX_CFLAGS_COMPILE_FOR_BUILD", "NIX_LDFLAGS", "NIX_CFLAGS_LINK",
-                 "NIX_APPLE_SDK_VERSION", "NIX_CC", "NIX_BINTOOLS")
-        with open(sys.argv[1], "w") as output:
-            settings = {name: os.environ[name] for name in names if name in os.environ}
-            for temporary in (os.environ.get("TMPDIR"), os.environ.get("NIX_BUILD_TOP")):
-                if temporary and any(temporary in value for value in settings.values()):
-                    raise RuntimeError("compiler settings retain a sandbox temporary path")
-            json.dump(settings, output)
-        PYTHON
-        ln -s ${python.interpreter} $out/python
-        ln -s ${wheelhouse} $out/wheelhouse
-        ln -s ${directIndex} $out/direct.json
-        ln -s ${./split_requirements.py} $out/split_requirements.py
-        ${lib.optionalString hasInputs "ln -s ${buildSrc} $out/project"}
-      '';
+  interactive = runCommand "uv-purifier-interactive" { } ''
+    mkdir $out
+    ln -s ${python.interpreter} $out/python
+    ln -s ${wheelhouse} $out/wheelhouse
+    ln -s ${interactiveDirectIndex} $out/direct.json
+    ln -s ${./split_requirements.py} $out/split_requirements.py
+    ln -s ${
+      writeText "uv-purifier-editable-versions.json" (
+        builtins.toJSON (
+          lib.listToAttrs (
+            map (m: {
+              name = m.path;
+              value = memberVersion m;
+            }) builtMembers
+          )
+        )
+      )
+    } $out/editable-versions.json
+    ${lib.optionalString platform.isLinux ''
+      cat > $out/prepare-runtime <<'EOF'
+      #!${stdenv.shell}
+      exec ${python3.interpreter} -I ${./prepare-runtime.py} "$1" \
+        --patchelf ${patchelf}/bin/patchelf \
+        --interpreter "$(${patchelf}/bin/patchelf --print-interpreter ${python.interpreter})" \
+        ${lib.escapeShellArgs (
+          lib.concatMap (library: [
+            "--library-dir"
+            "${lib.getLib library}/lib"
+          ]) runtimeLibraries
+        )}
+      EOF
+      chmod +x $out/prepare-runtime
+    ''}
+    ${lib.optionalString hasInputs "ln -s ${buildSrc} $out/project"}
+  '';
 in
 {
   inherit
@@ -722,6 +965,7 @@ in
     release
     fetches
     interactive
+    nativeInputs
     lock
     ;
 }

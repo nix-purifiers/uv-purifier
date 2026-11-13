@@ -13,6 +13,8 @@ import tomllib
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--state-root', type=Path, help='contain test scratch and caches in this directory')
+parser.add_argument('--python', type=Path, help='existing runtime for local adoption, independent of the pure SDK')
+parser.add_argument('--local-only', action='store_true', help='stop before optional pure builds and publication dry-run')
 args = parser.parse_args()
 if args.state_root:
     state = args.state_root.resolve()
@@ -36,12 +38,14 @@ with tempfile.TemporaryDirectory(prefix='uv-native-composition-') as temporary:
     in p.runCommand "uv-composition-native-tools" {} ''
       mkdir -p "$out/bin"
       ln -s ${p.uv}/bin/uv "$out/bin/uv"
-      ln -s ${p.python3.interpreter} "$out/bin/python"
+      ${if builtins.getEnv "UV_COMPOSITION_HOST_PYTHON" == "" then ''ln -s ${p.python3.interpreter} "$out/bin/python"'' else ""}
     '' """
     tools = Path(subprocess.check_output(['nix', 'build', '--impure', '--print-out-paths',
         '--out-link', str(temporary / 'tools'), '--expr', expression], text=True,
-        env=dict(os.environ, UV_COMPOSITION_FLAKE=snapshot)).strip())
-    os.environ['UV_PYTHON'] = str(tools / 'bin/python')
+        env=dict(os.environ, UV_COMPOSITION_FLAKE=snapshot,
+                 UV_COMPOSITION_HOST_PYTHON=str(args.python or ''))).strip())
+    project_python = str(args.python.resolve()) if args.python else str(tools / 'bin/python')
+    os.environ['UV_PYTHON'] = project_python
     project = temporary / 'project'
     source = project / 'src/composed_app/__init__.py'
     source.parent.mkdir(parents=True)
@@ -58,7 +62,7 @@ composed-app = "composed_app:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 ''')
-    subprocess.run([str(tools / 'bin/uv'), 'venv', '--python', str(tools / 'bin/python'),
+    subprocess.run([str(tools / 'bin/uv'), 'venv', '--python', project_python,
                     str(project / '.venv')], check=True)
     original = definition.read_bytes()
     reference = 'path:' + snapshot + '#checks.' + system + '.composition-producer'
@@ -99,6 +103,14 @@ build-backend = "hatchling.build"
         '--no-sync', 'composed-app'], text=True)
     assert 'simple attrs=25.3.0 docopt=0.6.2 markupsafe=3.0.3 &lt;nix&gt;' in output, output
     assert definition.read_bytes() == original
+    identity_code = 'import json,os,sys,sysconfig; print(json.dumps({"base":os.path.realpath(getattr(sys,"_base_executable",sys.executable)),"prefix":sys.base_prefix,"abi":sysconfig.get_config_var("SOABI"),"version":list(sys.version_info[:3])}))'
+    expected_runtime = json.loads(subprocess.check_output([project_python, '-I', '-c', identity_code], text=True))
+    actual_runtime = json.loads(subprocess.check_output([str(project / '.venv/bin/python'), '-I', '-c', identity_code], text=True))
+    assert actual_runtime == expected_runtime, (actual_runtime, expected_runtime)
+    print('LOCAL RUNTIME ' + json.dumps(actual_runtime), flush=True)
+    if args.local_only:
+        print('UV LOCAL SUPPLIED-PROJECTION COMPOSITION PASSED', flush=True)
+        raise SystemExit(0)
     expression = """let
       f = builtins.getFlake ("path:" + builtins.getEnv "UV_COMPOSITION_FLAKE");
       p = import f.inputs.nixpkgs {};
