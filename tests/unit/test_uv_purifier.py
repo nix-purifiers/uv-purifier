@@ -584,7 +584,7 @@ class ToolLockfile(unittest.TestCase):
 
 
 class SplitRequirements(unittest.TestCase):
-    def run_split(self, direct, exported_text=EXPORTED):
+    def run_split(self, direct, exported_text=EXPORTED, *, python=None):
         with tempfile.TemporaryDirectory() as d:
             exported = os.path.join(d, "exported.txt")
             index = os.path.join(d, "direct.json")
@@ -592,7 +592,7 @@ class SplitRequirements(unittest.TestCase):
             wheels = os.path.join(d, "wheels.txt")
             pathlib.Path(exported).write_text(exported_text)
             pathlib.Path(index).write_text(json.dumps(direct))
-            split.main(exported, index, requirements, wheels)
+            split.main(exported, index, requirements, wheels, python)
             return pathlib.Path(requirements).read_text(), pathlib.Path(wheels).read_text().split()
 
     def test_index_requirements_stay_and_the_others_become_wheels(self):
@@ -634,6 +634,29 @@ class SplitRequirements(unittest.TestCase):
         with self.assertRaises(SystemExit) as raised:
             self.run_split({"names": {"attrs": "/w/attrs"}, "paths": {}})
         self.assertIn("six @", str(raised.exception))
+
+    def test_selected_sdk_filters_markers_before_missing_direct_wheel_checks(self):
+        active = "sys_platform != 'never-a-real-platform'"
+        inactive = "sys_platform == 'never-a-real-platform'"
+        kept, wheels = self.run_split(
+            {"paths": {"./active": "/w/active"}},
+            "registry==1 ; " + active + " \\\n    --hash=sha256:abc\n"
+            "inactive==1 ; " + inactive + "\n"
+            "missing @ https://example.invalid/missing.whl ; " + inactive + "\n"
+            "-e ./missing-editable ; " + inactive + "\n"
+            "./active ; " + active + "\n",
+            python=sys.executable,
+        )
+        self.assertIn("registry==1", kept)
+        self.assertIn("--hash=sha256:abc", kept)
+        self.assertNotIn("inactive", kept)
+        self.assertEqual(wheels, ["/w/active"])
+
+    def test_marker_probe_reports_selected_target_identity(self):
+        environment = split.marker_environment(sys.executable)
+        self.assertEqual(environment["python_version"], "%d.%d" % sys.version_info[:2])
+        self.assertEqual(environment["sys_platform"], sys.platform)
+        self.assertEqual(environment["implementation_name"], sys.implementation.name)
 
 
 if __name__ == "__main__":

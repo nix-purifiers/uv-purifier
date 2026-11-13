@@ -20,6 +20,7 @@ out, one per line.
 import json
 import os
 import re
+import subprocess
 import sys
 from urllib.parse import unquote, urlsplit
 
@@ -52,7 +53,41 @@ def head(block):
     return None
 
 
-def main(exported, direct_json, requirements_out, wheels_out):
+def marker_environment(python):
+    # The helper's packaging library evaluates markers, but its runtime must
+    # never supply the target's Python version, implementation or OS facts.
+    return json.loads(subprocess.check_output([python, "-I", "-c", '''
+import json, os, platform, sys
+version = sys.implementation.version
+implementation_version = "%d.%d.%d" % version[:3]
+if version.releaselevel != "final":
+    implementation_version += {"alpha": "a", "beta": "b", "candidate": "rc"}.get(version.releaselevel, version.releaselevel) + str(version.serial)
+print(json.dumps({
+    "implementation_name": sys.implementation.name,
+    "implementation_version": implementation_version,
+    "os_name": os.name,
+    "platform_machine": platform.machine(),
+    "platform_release": platform.release(),
+    "platform_system": platform.system(),
+    "platform_version": platform.version(),
+    "python_full_version": platform.python_version(),
+    "platform_python_implementation": platform.python_implementation(),
+    "python_version": "%d.%d" % sys.version_info[:2],
+    "sys_platform": sys.platform,
+}))
+'''], text=True))
+
+
+def active(requirement, environment):
+    from packaging.requirements import Requirement
+    text = requirement.removeprefix("-e ").strip()
+    if not PINNED.match(text) and " @ " not in text:
+        text = "uv-local-source @ " + text
+    marker = Requirement(text).marker
+    return marker is None or marker.evaluate(environment)
+
+
+def main(exported, direct_json, requirements_out, wheels_out, python=None):
     with open(direct_json) as f:
         direct = json.load(f)
     by_name = {normalize(k): v for k, v in direct.get("names", {}).items()}
@@ -60,9 +95,12 @@ def main(exported, direct_json, requirements_out, wheels_out):
     editable_paths = {os.path.normpath(path) for path in direct.get("editablePaths", [])}
     with open(exported) as f:
         lines = f.read().splitlines()
+    environment = marker_environment(python) if python is not None else None
     kept, wheels, missing = [], [], []
     for block in blocks(lines):
         requirement = head(block)
+        if requirement is not None and environment is not None and not active(requirement, environment):
+            continue
         if requirement is None or PINNED.match(requirement):
             kept.extend(block)
             continue
@@ -93,4 +131,4 @@ def main(exported, direct_json, requirements_out, wheels_out):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:5])
+    main(*sys.argv[1:6])

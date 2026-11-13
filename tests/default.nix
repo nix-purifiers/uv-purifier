@@ -355,6 +355,8 @@ in
         touch $out
       '';
 
+  platform-markers = import ./platform-markers.nix { inherit pkgs; };
+
   # The outputs of a project are known by name when Nix evaluates, from
   # uv-purifier.lock.json: reading their names builds nothing.
   outputs =
